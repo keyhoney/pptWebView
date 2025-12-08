@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>학생용 슬라이드 뷰</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .slide-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .slide-display {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            min-height: 500px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .slide-image {
+            max-width: 100%;
+            max-height: 85vh;
+            object-fit: contain;
+        }
+        .status-bar {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 15px 20px;
+            margin-bottom: 20px;
+        }
+        .sync-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        .sync-indicator.active {
+            background-color: #28a745;
+        }
+        .sync-indicator.inactive {
+            background-color: #dc3545;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid slide-container">
+        <div class="status-bar">
+            <div class="row align-items-center">
+                <div class="col-md-6 mb-2 mb-md-0">
+                    <h5 class="mb-0">
+                        <span class="sync-indicator" id="syncIndicator"></span>
+                        <span id="syncStatus">연결 중...</span>
+                    </h5>
+                    <small class="text-muted">수업 ID: <span id="classIdDisplay">-</span></small>
+                </div>
+                <div class="col-md-6 text-md-end">
+                    <span class="badge bg-info fs-6 px-3 py-2">
+                        슬라이드 <span id="currentSlide">0</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <div class="slide-display" id="slideDisplay">
+            <div class="text-center">
+                <div class="spinner-border text-primary" role="status" id="loadingSpinner">
+                    <span class="visually-hidden">로딩 중...</span>
+                </div>
+                <p class="mt-3 text-muted" id="loadingText">슬라이드를 불러오는 중...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentSlideIndex = 0;
+        let classId = '';
+        let pollingInterval = null;
+        let lastSlideIndex = 0;
+
+        // URL에서 classId 읽기
+        function getClassId() {
+            const urlParams = new URLSearchParams(window.location.search);
+            classId = urlParams.get('classId');
+            if (!classId) {
+                alert('classId 파라미터가 필요합니다. URL에 ?classId=class-1 을 추가하세요.');
+                return false;
+            }
+            document.getElementById('classIdDisplay').textContent = classId;
+            return true;
+        }
+
+        // 슬라이드 이미지 로드
+        function loadSlide(index) {
+            const slideDisplay = document.getElementById('slideDisplay');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const loadingText = document.getElementById('loadingText');
+            
+            if (index < 1) {
+                slideDisplay.innerHTML = `
+                    <div class="text-center text-muted">
+                        <p class="fs-5">슬라이드를 기다리는 중...</p>
+                        <p class="small">교사가 슬라이드를 시작하면 여기에 표시됩니다.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            loadingSpinner.classList.remove('d-none');
+            loadingText.classList.remove('d-none');
+
+            const img = new Image();
+            img.className = 'slide-image';
+            img.src = `slides/slide${index}.png`;
+            img.alt = `슬라이드 ${index}`;
+            
+            img.onload = () => {
+                slideDisplay.innerHTML = '';
+                slideDisplay.appendChild(img);
+                loadingSpinner.classList.add('d-none');
+                loadingText.classList.add('d-none');
+                updateSyncStatus(true);
+            };
+            
+            img.onerror = () => {
+                slideDisplay.innerHTML = `
+                    <div class="text-center text-warning">
+                        <p class="fs-5">슬라이드 ${index}를 불러올 수 없습니다.</p>
+                        <p class="small">파일 경로: slides/slide${index}.png</p>
+                    </div>
+                `;
+                loadingSpinner.classList.add('d-none');
+                loadingText.classList.add('d-none');
+                updateSyncStatus(true);
+            };
+        }
+
+        // 서버에서 슬라이드 상태 가져오기
+        async function fetchSlideState() {
+            try {
+                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const serverSlideIndex = data.slideIndex || 0;
+
+                // 슬라이드가 변경되었는지 확인
+                if (serverSlideIndex !== currentSlideIndex) {
+                    currentSlideIndex = serverSlideIndex;
+                    loadSlide(currentSlideIndex);
+                    updateSlideCounter();
+                }
+
+                updateSyncStatus(true);
+                return true;
+            } catch (error) {
+                console.error('슬라이드 상태 가져오기 오류:', error);
+                updateSyncStatus(false);
+                return false;
+            }
+        }
+
+        // 동기화 상태 업데이트
+        function updateSyncStatus(isConnected) {
+            const indicator = document.getElementById('syncIndicator');
+            const statusText = document.getElementById('syncStatus');
+            
+            if (isConnected) {
+                indicator.className = 'sync-indicator active';
+                statusText.textContent = '동기화 중';
+            } else {
+                indicator.className = 'sync-indicator inactive';
+                statusText.textContent = '연결 끊김';
+            }
+        }
+
+        // 슬라이드 카운터 업데이트
+        function updateSlideCounter() {
+            document.getElementById('currentSlide').textContent = currentSlideIndex || '-';
+        }
+
+        // 폴링 시작 (1-2초 간격)
+        function startPolling() {
+            // 즉시 한 번 실행
+            fetchSlideState();
+            
+            // 1.5초마다 폴링
+            pollingInterval = setInterval(() => {
+                fetchSlideState();
+            }, 1500);
+        }
+
+        // 폴링 중지
+        function stopPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        // 페이지 가시성 변경 시 폴링 제어
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopPolling();
+            } else {
+                startPolling();
+            }
+        });
+
+        // 초기화
+        async function init() {
+            if (!getClassId()) {
+                return;
+            }
+
+            // 초기 슬라이드 상태 가져오기
+            await fetchSlideState();
+            
+            // 폴링 시작
+            startPolling();
+        }
+
+        // 페이지 언로드 시 정리
+        window.addEventListener('beforeunload', () => {
+            stopPolling();
+        });
+
+        // 페이지 로드 시 초기화
+        init();
+    </script>
+</body>
+</html>
+
