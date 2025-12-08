@@ -138,7 +138,8 @@
             while (found) {
                 count++;
                 const img = new Image();
-                const testUrl = `slides/${lessonId}/slide${count}.png`;
+                // 한글 파일명: 슬라이드1.JPG, 슬라이드2.JPG, ...
+                const testUrl = `slides/${lessonId}/슬라이드${count}.JPG`;
                 try {
                     await new Promise((resolve, reject) => {
                         img.onload = resolve;
