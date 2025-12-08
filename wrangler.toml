@@ -1,19 +1,6 @@
 name = "slide-sync-class"
 compatibility_date = "2024-08-01"
 
-# Cloudflare KV 네임스페이스 바인딩
-# 사용 방법:
-# 1. Cloudflare 대시보드에서 Workers & Pages → KV → Create Namespace
-# 2. 생성된 Namespace ID를 아래 id 값에 입력
-# 3. binding 이름은 "SLIDES"로 유지 (코드에서 사용)
 [[kv_namespaces]]
 binding = "SLIDES"
 id = "1f1a15b43b5543ec895295a2686fb6b1"
-
-# Pages 배포 설정
-# Cloudflare Pages에서 자동으로 인식됩니다.
-# Build command: (없음)
-# Output directory: public
-# Functions directory: functions
-
-
