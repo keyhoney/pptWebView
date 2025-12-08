@@ -8,11 +8,12 @@ compatibility_date = "2024-08-01"
 # 3. binding 이름은 "SLIDES"로 유지 (코드에서 사용)
 [[kv_namespaces]]
 binding = "SLIDES"
-id = "여기에_KV_Namespace_ID_붙여넣기"
+id = "1f1a15b43b5543ec895295a2686fb6b1"
 
 # Pages 배포 설정
 # Cloudflare Pages에서 자동으로 인식됩니다.
 # Build command: (없음)
 # Output directory: public
 # Functions directory: functions
+
 
