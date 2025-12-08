@@ -302,12 +302,12 @@
             document.getElementById('lessonInfo').textContent = `[${currentLessonId}]`;
         }
 
-        // 폴링 시작 (1초 간격)
+        // 폴링 시작 (3.5초 간격)
         function startPolling() {
-            // 1초마다 폴링
+            // 3.5초마다 폴링
             pollingInterval = setInterval(() => {
                 fetchSlideState();
-            }, 2000);
+            }, 3.500);
         }
 
         // 폴링 중지
@@ -350,7 +350,7 @@
             await fetchSlideState();
             renderSlide();
             
-            // 1초마다 교사 상태 따라가기
+            // 3.5초마다 교사 상태 따라가기
             startPolling();
         }
 
@@ -364,6 +364,7 @@
     </script>
 </body>
 </html>
+
 
 
 
