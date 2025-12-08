@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>교사용 슬라이드 제어</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
@@ -50,6 +51,19 @@
             </div>
         </div>
 
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body">
+                        <label for="lessonSelect" class="form-label fw-bold">레슨 선택:</label>
+                        <select class="form-select form-select-lg" id="lessonSelect">
+                            <option value="">레슨을 불러오는 중...</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="slide-display" id="slideDisplay">
             <div class="text-center">
                 <div class="spinner-border text-primary" role="status" id="loadingSpinner">
@@ -72,7 +86,7 @@
                 <div class="col-md-4 text-center mb-3 mb-md-0">
                     <div class="d-flex align-items-center justify-content-center">
                         <span class="badge bg-info fs-6 px-3 py-2">
-                            슬라이드 <span id="currentSlide">0</span> / <span id="totalSlides">0</span>
+                            <span id="lessonInfo">[lesson1]</span> 슬라이드 <span id="currentSlide">0</span> / <span id="totalSlides">0</span>
                         </span>
                     </div>
                 </div>
@@ -97,8 +111,10 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // 레슨별 슬라이드 경로 (자동 감지로 채워짐)
+        let LESSONS = {};
         let currentSlideIndex = 0;
-        let totalSlides = 0;
+        let currentLessonId = "lesson1";
         let classId = '';
 
         // URL에서 classId 읽기
@@ -113,90 +129,144 @@
             return true;
         }
 
-        // 슬라이드 개수 확인 (slide1.png, slide2.png, ...)
-        async function detectTotalSlides() {
+        // 특정 레슨의 슬라이드 개수 확인
+        async function detectSlidesForLesson(lessonId) {
+            const slides = [];
             let count = 0;
             let found = true;
+            
             while (found) {
                 count++;
                 const img = new Image();
-                const testUrl = `slides/slide${count}.png`;
+                const testUrl = `slides/${lessonId}/slide${count}.png`;
                 try {
                     await new Promise((resolve, reject) => {
                         img.onload = resolve;
                         img.onerror = reject;
                         img.src = testUrl;
                     });
+                    slides.push(testUrl);
                 } catch {
                     found = false;
-                    count--;
                 }
             }
-            return count;
+            return slides;
+        }
+
+        // 모든 레슨 자동 감지
+        async function detectAllLessons() {
+            const lessons = {};
+            let lessonNum = 1;
+            let found = true;
+
+            while (found) {
+                const lessonId = `lesson${lessonNum}`;
+                const slides = await detectSlidesForLesson(lessonId);
+                
+                if (slides.length > 0) {
+                    lessons[lessonId] = slides;
+                    lessonNum++;
+                } else {
+                    found = false;
+                }
+            }
+
+            return lessons;
+        }
+
+        // 현재 레슨의 슬라이드 배열 가져오기
+        function getCurrentSlides() {
+            return LESSONS[currentLessonId] || [];
         }
 
         // 슬라이드 이미지 로드
         function loadSlide(index) {
             const slideDisplay = document.getElementById('slideDisplay');
-            const loadingSpinner = document.getElementById('loadingSpinner');
-            const loadingText = document.getElementById('loadingText');
+            const slides = getCurrentSlides();
             
-            if (index < 1 || index > totalSlides) {
+            if (slides.length === 0) {
                 slideDisplay.innerHTML = `
                     <div class="text-center text-muted">
-                        <p class="fs-5">슬라이드 ${index}를 찾을 수 없습니다.</p>
-                        <p class="small">슬라이드 범위: 1 ~ ${totalSlides}</p>
+                        <p class="fs-5">선택된 레슨에 슬라이드가 없습니다.</p>
                     </div>
                 `;
                 return;
             }
 
-            loadingSpinner.classList.remove('d-none');
-            loadingText.classList.remove('d-none');
+            if (index < 0) index = 0;
+            if (index >= slides.length) index = slides.length - 1;
+
+            // 로딩 상태 표시
+            slideDisplay.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">로딩 중...</span>
+                    </div>
+                    <p class="mt-3 text-muted">슬라이드를 불러오는 중...</p>
+                </div>
+            `;
 
             const img = new Image();
             img.className = 'slide-image';
-            img.src = `slides/slide${index}.png`;
-            img.alt = `슬라이드 ${index}`;
+            img.src = slides[index];
+            img.alt = `${currentLessonId} 슬라이드 ${index + 1}`;
             
             img.onload = () => {
                 slideDisplay.innerHTML = '';
                 slideDisplay.appendChild(img);
-                loadingSpinner.classList.add('d-none');
-                loadingText.classList.add('d-none');
             };
             
             img.onerror = () => {
                 slideDisplay.innerHTML = `
                     <div class="text-center text-danger">
-                        <p class="fs-5">슬라이드 ${index}를 불러올 수 없습니다.</p>
-                        <p class="small">파일 경로: slides/slide${index}.png</p>
+                        <p class="fs-5">슬라이드를 불러올 수 없습니다.</p>
+                        <p class="small">파일 경로: ${slides[index]}</p>
+                        <p class="small mt-2">파일이 존재하는지 확인해주세요.</p>
                     </div>
                 `;
-                loadingSpinner.classList.add('d-none');
-                loadingText.classList.add('d-none');
             };
+        }
+
+        // 슬라이드 렌더링 (로드 + 카운터 업데이트)
+        function renderSlide() {
+            const slides = getCurrentSlides();
+            if (slides.length === 0) {
+                document.getElementById('slideDisplay').innerHTML = `
+                    <div class="text-center text-muted">
+                        <p class="fs-5">선택된 레슨에 슬라이드가 없습니다.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            if (currentSlideIndex < 0) currentSlideIndex = 0;
+            if (currentSlideIndex >= slides.length) currentSlideIndex = slides.length - 1;
+
+            loadSlide(currentSlideIndex);
+            updateSlideCounter();
         }
 
         // 슬라이드 변경
         async function changeSlide(direction) {
+            const slides = getCurrentSlides();
+            if (slides.length === 0) return;
+
             const newIndex = currentSlideIndex + direction;
             
-            if (newIndex < 1 || newIndex > totalSlides) {
+            if (newIndex < 0 || newIndex >= slides.length) {
                 showStatus('첫 번째 또는 마지막 슬라이드입니다.', 'warning');
                 return;
             }
 
             currentSlideIndex = newIndex;
-            loadSlide(currentSlideIndex);
-            updateSlideCounter();
+            renderSlide();
             
             // API에 슬라이드 변경 전송
-            await updateSlideOnServer(currentSlideIndex);
+            await syncStateToServer();
         }
 
-        // 서버에 슬라이드 상태 업데이트
-        async function updateSlideOnServer(slideIndex) {
+        // 서버에 상태 동기화
+        async function syncStateToServer() {
             try {
                 const response = await fetch('/api/slide', {
                     method: 'POST',
@@ -205,7 +275,8 @@
                     },
                     body: JSON.stringify({
                         classId: classId,
-                        slideIndex: slideIndex
+                        lessonId: currentLessonId,
+                        slideIndex: currentSlideIndex
                     })
                 });
 
@@ -218,19 +289,21 @@
                     showStatus('슬라이드가 학생들에게 동기화되었습니다.', 'success');
                 }
             } catch (error) {
-                console.error('슬라이드 업데이트 오류:', error);
+                console.error('상태 동기화 오류:', error);
                 showStatus('슬라이드 동기화에 실패했습니다. 다시 시도해주세요.', 'danger');
             }
         }
 
         // 슬라이드 카운터 업데이트
         function updateSlideCounter() {
-            document.getElementById('currentSlide').textContent = currentSlideIndex;
-            document.getElementById('totalSlides').textContent = totalSlides;
+            const slides = getCurrentSlides();
+            document.getElementById('currentSlide').textContent = currentSlideIndex + 1;
+            document.getElementById('totalSlides').textContent = slides.length;
+            document.getElementById('lessonInfo').textContent = `[${currentLessonId}]`;
             
             // 버튼 활성화/비활성화
-            document.getElementById('prevBtn').disabled = currentSlideIndex <= 1;
-            document.getElementById('nextBtn').disabled = currentSlideIndex >= totalSlides;
+            document.getElementById('prevBtn').disabled = currentSlideIndex <= 0;
+            document.getElementById('nextBtn').disabled = currentSlideIndex >= slides.length - 1;
         }
 
         // 상태 메시지 표시
@@ -246,41 +319,85 @@
             }, 3000);
         }
 
+        // 서버에서 기존 상태 불러오기
+        async function initFromServer() {
+            try {
+                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}`, { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.lessonId) {
+                        currentLessonId = data.lessonId;
+                        document.getElementById('lessonSelect').value = currentLessonId;
+                    }
+                    if (typeof data.slideIndex === 'number') {
+                        currentSlideIndex = data.slideIndex;
+                    }
+                }
+            } catch (error) {
+                console.error('초기 상태 불러오기 오류:', error);
+            } finally {
+                renderSlide();
+            }
+        }
+
+        // 레슨 선택 드롭다운 채우기
+        function populateLessonSelect() {
+            const select = document.getElementById('lessonSelect');
+            select.innerHTML = '';
+            
+            const lessonIds = Object.keys(LESSONS).sort();
+            if (lessonIds.length === 0) {
+                select.innerHTML = '<option value="">레슨을 찾을 수 없습니다</option>';
+                return;
+            }
+
+            lessonIds.forEach(lessonId => {
+                const option = document.createElement('option');
+                option.value = lessonId;
+                option.textContent = lessonId.charAt(0).toUpperCase() + lessonId.slice(1).replace(/([A-Z])/g, ' $1');
+                select.appendChild(option);
+            });
+        }
+
         // 초기화
         async function init() {
             if (!getClassId()) {
                 return;
             }
 
-            // 슬라이드 개수 감지
-            totalSlides = await detectTotalSlides();
-            if (totalSlides === 0) {
+            // 모든 레슨 자동 감지
+            LESSONS = await detectAllLessons();
+            
+            if (Object.keys(LESSONS).length === 0) {
                 document.getElementById('slideDisplay').innerHTML = `
                     <div class="text-center text-warning">
-                        <p class="fs-5">슬라이드 이미지를 찾을 수 없습니다.</p>
-                        <p class="small">public/slides/ 폴더에 slide1.png, slide2.png 등을 추가하세요.</p>
+                        <p class="fs-5">레슨을 찾을 수 없습니다.</p>
+                        <p class="small">slides/lesson1/, slides/lesson2/ 등의 폴더에 슬라이드 이미지를 추가하세요.</p>
                     </div>
                 `;
                 return;
             }
 
-            // 현재 슬라이드 인덱스 로드 (서버에서)
-            try {
-                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    currentSlideIndex = data.slideIndex || 1;
-                } else {
-                    currentSlideIndex = 1;
-                }
-            } catch (error) {
-                console.error('슬라이드 상태 로드 오류:', error);
-                currentSlideIndex = 1;
+            // 레슨 선택 드롭다운 채우기
+            populateLessonSelect();
+            
+            // 첫 번째 레슨을 기본값으로 설정
+            const firstLesson = Object.keys(LESSONS)[0];
+            if (firstLesson) {
+                currentLessonId = firstLesson;
+                document.getElementById('lessonSelect').value = currentLessonId;
             }
 
-            // 첫 번째 슬라이드 로드
-            loadSlide(currentSlideIndex);
-            updateSlideCounter();
+            // 레슨 선택 변경 이벤트
+            document.getElementById('lessonSelect').addEventListener('change', () => {
+                currentLessonId = document.getElementById('lessonSelect').value;
+                currentSlideIndex = 0; // 새 레슨의 첫 슬라이드부터 시작
+                renderSlide();
+                syncStateToServer();
+            });
+
+            // 서버에서 기존 상태 불러오기
+            await initFromServer();
         }
 
         // 키보드 단축키
@@ -291,6 +408,9 @@
                 changeSlide(1);
             }
         });
+
+        // 전역에서 버튼이 쓸 수 있게 노출
+        window.changeSlide = changeSlide;
 
         // 페이지 로드 시 초기화
         init();
