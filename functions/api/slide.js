@@ -1,7 +1,7 @@
 /**
  * 슬라이드 상태 관리 API
- * GET: 현재 슬라이드 인덱스 조회
- * POST: 슬라이드 인덱스 업데이트
+ * GET: 현재 레슨 ID와 슬라이드 인덱스 조회
+ * POST: 레슨 ID와 슬라이드 인덱스 업데이트
  */
 
 export async function onRequestGet(context) {
@@ -21,12 +21,26 @@ export async function onRequestGet(context) {
   }
 
   try {
-    // KV에서 슬라이드 인덱스 가져오기
-    const value = await env.SLIDES.get(classId);
-    const slideIndex = value ? Number(value) : 0;
+    // KV에서 상태 가져오기
+    const stored = await env.SLIDES.get(classId);
+    let lessonId = "lesson1";
+    let slideIndex = 0;
+
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        // 새 형식: { lessonId, slideIndex }
+        if (parsed.lessonId) lessonId = parsed.lessonId;
+        if (typeof parsed.slideIndex === "number") slideIndex = parsed.slideIndex;
+      } catch {
+        // 혹시 예전처럼 숫자만 저장돼 있었다면 (하위 호환성)
+        const num = Number(stored);
+        if (!Number.isNaN(num)) slideIndex = num;
+      }
+    }
 
     return new Response(
-      JSON.stringify({ slideIndex }),
+      JSON.stringify({ lessonId, slideIndex }),
       {
         status: 200,
         headers: {
@@ -55,12 +69,22 @@ export async function onRequestPost(context) {
   try {
     // 요청 본문 파싱
     const body = await request.json();
-    const { classId, slideIndex } = body || {};
+    const { classId, lessonId, slideIndex } = body || {};
 
     // 유효성 검사
     if (!classId || typeof classId !== "string") {
       return new Response(
         JSON.stringify({ error: "classId is required and must be a string" }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    if (!lessonId || typeof lessonId !== "string") {
+      return new Response(
+        JSON.stringify({ error: "lessonId is required and must be a string" }),
         {
           status: 400,
           headers: { "Content-Type": "application/json" },
@@ -78,11 +102,12 @@ export async function onRequestPost(context) {
       );
     }
 
-    // KV에 슬라이드 인덱스 저장
-    await env.SLIDES.put(classId, String(slideIndex));
+    // KV에 JSON 형식으로 저장 { lessonId, slideIndex }
+    const value = JSON.stringify({ lessonId, slideIndex });
+    await env.SLIDES.put(classId, value);
 
     return new Response(
-      JSON.stringify({ ok: true, slideIndex }),
+      JSON.stringify({ ok: true, lessonId, slideIndex }),
       {
         status: 200,
         headers: {
