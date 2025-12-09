@@ -40,13 +40,66 @@
         .status-badge {
             font-size: 0.9rem;
         }
+        .thumbnail-sidebar {
+            position: fixed;
+            right: 0;
+            top: 0;
+            width: 200px;
+            height: 100vh;
+            background: white;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+            overflow-y: auto;
+            padding: 20px 10px;
+            z-index: 1000;
+        }
+        .thumbnail-item {
+            margin-bottom: 10px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            border-radius: 4px;
+            padding: 5px;
+            transition: all 0.2s;
+        }
+        .thumbnail-item:hover {
+            border-color: #0d6efd;
+            transform: scale(1.05);
+        }
+        .thumbnail-item.active {
+            border-color: #0d6efd;
+            background-color: #e7f1ff;
+        }
+        .thumbnail-item img {
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+        .thumbnail-item .slide-number {
+            text-align: center;
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 5px;
+        }
+        .main-content {
+            margin-right: 220px;
+        }
+        @media (max-width: 768px) {
+            .thumbnail-sidebar {
+                display: none;
+            }
+            .main-content {
+                margin-right: 0;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="container-fluid slide-container">
+    <div class="container-fluid slide-container main-content">
         <div class="row mb-3">
             <div class="col-12">
-                <p class="text-muted mb-0">수업 ID: <span id="classIdDisplay" class="badge bg-primary status-badge">-</span></p>
+                <p class="text-muted mb-0">
+                    수업 ID: <span id="classIdDisplay" class="badge bg-primary status-badge">-</span>
+                    <span class="ms-3">학생 참여: <span id="studentCount" class="badge bg-success status-badge">0명</span></span>
+                </p>
             </div>
         </div>
 
@@ -82,9 +135,12 @@
                     </button>
                 </div>
                 <div class="col-md-4 text-center mb-3 mb-md-0">
-                    <div class="d-flex align-items-center justify-content-center">
+                    <div class="d-flex align-items-center justify-content-center gap-2">
                         <span class="badge bg-info fs-6 px-3 py-2">
-                            <span id="lessonInfo">[lesson1]</span> 슬라이드 <span id="currentSlide">0</span> / <span id="totalSlides">0</span>
+                            <span id="lessonInfo">[lesson1]</span> 슬라이드 
+                            <input type="number" id="slideNumberInput" class="form-control form-control-sm d-inline-block" 
+                                   style="width: 60px; text-align: center;" min="1" value="1">
+                            / <span id="totalSlides">0</span>
                         </span>
                     </div>
                 </div>
@@ -107,13 +163,21 @@
         </div>
     </div>
 
+    <!-- 썸네일 네비게이션 사이드바 -->
+    <div class="thumbnail-sidebar" id="thumbnailSidebar">
+        <h6 class="mb-3 text-center">슬라이드 목록</h6>
+        <div id="thumbnailList"></div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // 레슨별 슬라이드 경로 (자동 감지로 채워짐)
+        // 레슨별 슬라이드 경로 (API로부터 로드됨)
         let LESSONS = {};
         let currentSlideIndex = 0;
         let currentLessonId = "lesson1";
         let classId = '';
+        let preloadedImages = new Map(); // 프리로드된 이미지 캐시
+        let studentCountInterval = null; // 학생 수 조회 인터벌
 
         // URL에서 classId 읽기
         function getClassId() {
@@ -127,55 +191,34 @@
             return true;
         }
 
-        // 특정 레슨의 슬라이드 개수 확인
-        async function detectSlidesForLesson(lessonId) {
-            const slides = [];
-            let count = 0;
-            let found = true;
-            
-            while (found) {
-                count++;
-                const img = new Image();
-                // 한글 파일명: 슬라이드1.JPG, 슬라이드2.JPG, ...
-                const testUrl = `slides/${lessonId}/슬라이드${count}.JPG`;
-                try {
-                    await new Promise((resolve, reject) => {
-                        img.onload = resolve;
-                        img.onerror = reject;
-                        img.src = testUrl;
-                    });
-                    slides.push(testUrl);
-                } catch {
-                    found = false;
+        // API에서 모든 레슨 가져오기
+        async function fetchAllLessons() {
+            try {
+                const response = await fetch('/api/lessons', { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
                 }
+                return await response.json();
+            } catch (error) {
+                console.error('레슨 목록 가져오기 오류:', error);
+                return {};
             }
-            return slides;
-        }
-
-        // 모든 레슨 자동 감지
-        async function detectAllLessons() {
-            const lessons = {};
-            let lessonNum = 1;
-            let found = true;
-
-            while (found) {
-                const lessonId = `lesson${lessonNum}`;
-                const slides = await detectSlidesForLesson(lessonId);
-                
-                if (slides.length > 0) {
-                    lessons[lessonId] = slides;
-                    lessonNum++;
-                } else {
-                    found = false;
-                }
-            }
-
-            return lessons;
         }
 
         // 현재 레슨의 슬라이드 배열 가져오기
         function getCurrentSlides() {
             return LESSONS[currentLessonId] || [];
+        }
+
+        // 이미지 프리로딩
+        function preloadSlide(slideUrl) {
+            if (preloadedImages.has(slideUrl)) {
+                return; // 이미 프리로드됨
+            }
+
+            const img = new Image();
+            img.src = slideUrl;
+            preloadedImages.set(slideUrl, img);
         }
 
         // 슬라이드 이미지 로드
@@ -205,21 +248,39 @@
                 </div>
             `;
 
-            const img = new Image();
+            const currentSlideUrl = slides[index];
+            
+            // 프리로드된 이미지가 있으면 사용, 없으면 새로 로드
+            let img;
+            if (preloadedImages.has(currentSlideUrl)) {
+                img = preloadedImages.get(currentSlideUrl).cloneNode(false);
+            } else {
+                img = new Image();
+                img.src = currentSlideUrl;
+                preloadedImages.set(currentSlideUrl, img);
+            }
+            
             img.className = 'slide-image';
-            img.src = slides[index];
             img.alt = `${currentLessonId} 슬라이드 ${index + 1}`;
             
             img.onload = () => {
                 slideDisplay.innerHTML = '';
                 slideDisplay.appendChild(img);
+                
+                // 다음/이전 슬라이드 프리로딩
+                if (index + 1 < slides.length) {
+                    preloadSlide(slides[index + 1]);
+                }
+                if (index - 1 >= 0) {
+                    preloadSlide(slides[index - 1]);
+                }
             };
             
             img.onerror = () => {
                 slideDisplay.innerHTML = `
                     <div class="text-center text-danger">
                         <p class="fs-5">슬라이드를 불러올 수 없습니다.</p>
-                        <p class="small">파일 경로: ${slides[index]}</p>
+                        <p class="small">파일 경로: ${currentSlideUrl}</p>
                         <p class="small mt-2">파일이 존재하는지 확인해주세요.</p>
                     </div>
                 `;
@@ -243,6 +304,7 @@
 
             loadSlide(currentSlideIndex);
             updateSlideCounter();
+            updateThumbnails();
         }
 
         // 슬라이드 변경
@@ -261,6 +323,22 @@
             renderSlide();
             
             // API에 슬라이드 변경 전송
+            await syncStateToServer();
+        }
+
+        // 슬라이드 번호로 직접 이동
+        async function jumpToSlide(slideNumber) {
+            const slides = getCurrentSlides();
+            if (slides.length === 0) return;
+
+            const index = slideNumber - 1; // 1-based to 0-based
+            if (index < 0 || index >= slides.length) {
+                showStatus('유효하지 않은 슬라이드 번호입니다.', 'warning');
+                return;
+            }
+
+            currentSlideIndex = index;
+            renderSlide();
             await syncStateToServer();
         }
 
@@ -296,13 +374,58 @@
         // 슬라이드 카운터 업데이트
         function updateSlideCounter() {
             const slides = getCurrentSlides();
-            document.getElementById('currentSlide').textContent = currentSlideIndex + 1;
+            const slideNumberInput = document.getElementById('slideNumberInput');
+            slideNumberInput.value = currentSlideIndex + 1;
+            slideNumberInput.max = slides.length;
             document.getElementById('totalSlides').textContent = slides.length;
             document.getElementById('lessonInfo').textContent = `[${currentLessonId}]`;
             
             // 버튼 활성화/비활성화
             document.getElementById('prevBtn').disabled = currentSlideIndex <= 0;
             document.getElementById('nextBtn').disabled = currentSlideIndex >= slides.length - 1;
+        }
+
+        // 썸네일 네비게이션 업데이트
+        function updateThumbnails() {
+            const slides = getCurrentSlides();
+            const thumbnailList = document.getElementById('thumbnailList');
+            thumbnailList.innerHTML = '';
+
+            slides.forEach((slideUrl, index) => {
+                const thumbnailItem = document.createElement('div');
+                thumbnailItem.className = `thumbnail-item ${index === currentSlideIndex ? 'active' : ''}`;
+                thumbnailItem.onclick = () => {
+                    currentSlideIndex = index;
+                    renderSlide();
+                    syncStateToServer();
+                };
+
+                const img = document.createElement('img');
+                img.src = slideUrl;
+                img.alt = `슬라이드 ${index + 1}`;
+                img.loading = 'lazy'; // 지연 로딩
+
+                const slideNumber = document.createElement('div');
+                slideNumber.className = 'slide-number';
+                slideNumber.textContent = `${index + 1}`;
+
+                thumbnailItem.appendChild(img);
+                thumbnailItem.appendChild(slideNumber);
+                thumbnailList.appendChild(thumbnailItem);
+            });
+        }
+
+        // 학생 수 조회
+        async function fetchStudentCount() {
+            try {
+                const response = await fetch(`/api/students?classId=${encodeURIComponent(classId)}`, { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('studentCount').textContent = `${data.count}명`;
+                }
+            } catch (error) {
+                console.error('학생 수 조회 오류:', error);
+            }
         }
 
         // 상태 메시지 표시
@@ -364,8 +487,8 @@
                 return;
             }
 
-            // 모든 레슨 자동 감지
-            LESSONS = await detectAllLessons();
+            // API에서 모든 레슨 가져오기
+            LESSONS = await fetchAllLessons();
             
             if (Object.keys(LESSONS).length === 0) {
                 document.getElementById('slideDisplay').innerHTML = `
@@ -395,8 +518,20 @@
                 syncStateToServer();
             });
 
+            // 슬라이드 번호 입력 필드 이벤트
+            document.getElementById('slideNumberInput').addEventListener('change', (e) => {
+                const slideNumber = parseInt(e.target.value);
+                if (!isNaN(slideNumber)) {
+                    jumpToSlide(slideNumber);
+                }
+            });
+
             // 서버에서 기존 상태 불러오기
             await initFromServer();
+
+            // 학생 수 조회 시작 (5초마다)
+            fetchStudentCount();
+            studentCountInterval = setInterval(fetchStudentCount, 5000);
         }
 
         // 키보드 단축키
@@ -410,6 +545,13 @@
 
         // 전역에서 버튼이 쓸 수 있게 노출
         window.changeSlide = changeSlide;
+
+        // 페이지 언로드 시 정리
+        window.addEventListener('beforeunload', () => {
+            if (studentCountInterval) {
+                clearInterval(studentCountInterval);
+            }
+        });
 
         // 페이지 로드 시 초기화
         init();

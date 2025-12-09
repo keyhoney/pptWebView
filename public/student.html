@@ -105,12 +105,13 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // 레슨별 슬라이드 경로 (자동 감지로 채워짐)
+        // 레슨별 슬라이드 경로 (API로부터 로드됨)
         let LESSONS = {};
         let currentSlideIndex = 0;
         let currentLessonId = "lesson1";
         let classId = '';
-        let pollingInterval = null;
+        let eventSource = null;
+        let preloadedImages = new Map(); // 프리로드된 이미지 캐시
 
         // URL에서 classId 읽기
         function getClassId() {
@@ -124,55 +125,34 @@
             return true;
         }
 
-        // 특정 레슨의 슬라이드 개수 확인
-        async function detectSlidesForLesson(lessonId) {
-            const slides = [];
-            let count = 0;
-            let found = true;
-            
-            while (found) {
-                count++;
-                const img = new Image();
-                // 한글 파일명: 슬라이드1.JPG, 슬라이드2.JPG, ...
-                const testUrl = `slides/${lessonId}/슬라이드${count}.JPG`;
-                try {
-                    await new Promise((resolve, reject) => {
-                        img.onload = resolve;
-                        img.onerror = reject;
-                        img.src = testUrl;
-                    });
-                    slides.push(testUrl);
-                } catch {
-                    found = false;
+        // API에서 모든 레슨 가져오기
+        async function fetchAllLessons() {
+            try {
+                const response = await fetch('/api/lessons', { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
                 }
+                return await response.json();
+            } catch (error) {
+                console.error('레슨 목록 가져오기 오류:', error);
+                return {};
             }
-            return slides;
-        }
-
-        // 모든 레슨 자동 감지
-        async function detectAllLessons() {
-            const lessons = {};
-            let lessonNum = 1;
-            let found = true;
-
-            while (found) {
-                const lessonId = `lesson${lessonNum}`;
-                const slides = await detectSlidesForLesson(lessonId);
-                
-                if (slides.length > 0) {
-                    lessons[lessonId] = slides;
-                    lessonNum++;
-                } else {
-                    found = false;
-                }
-            }
-
-            return lessons;
         }
 
         // 현재 레슨의 슬라이드 배열 가져오기
         function getCurrentSlides() {
             return LESSONS[currentLessonId] || [];
+        }
+
+        // 이미지 프리로딩
+        function preloadSlide(slideUrl) {
+            if (preloadedImages.has(slideUrl)) {
+                return; // 이미 프리로드됨
+            }
+
+            const img = new Image();
+            img.src = slideUrl;
+            preloadedImages.set(slideUrl, img);
         }
 
         // 슬라이드 이미지 로드
@@ -202,22 +182,40 @@
                 </div>
             `;
 
-            const img = new Image();
+            const currentSlideUrl = slides[index];
+            
+            // 프리로드된 이미지가 있으면 사용, 없으면 새로 로드
+            let img;
+            if (preloadedImages.has(currentSlideUrl)) {
+                img = preloadedImages.get(currentSlideUrl).cloneNode(false);
+            } else {
+                img = new Image();
+                img.src = currentSlideUrl;
+                preloadedImages.set(currentSlideUrl, img);
+            }
+            
             img.className = 'slide-image';
-            img.src = slides[index];
             img.alt = `${currentLessonId} 슬라이드 ${index + 1}`;
             
             img.onload = () => {
                 slideDisplay.innerHTML = '';
                 slideDisplay.appendChild(img);
                 updateSyncStatus(true);
+                
+                // 다음/이전 슬라이드 프리로딩
+                if (index + 1 < slides.length) {
+                    preloadSlide(slides[index + 1]);
+                }
+                if (index - 1 >= 0) {
+                    preloadSlide(slides[index - 1]);
+                }
             };
             
             img.onerror = () => {
                 slideDisplay.innerHTML = `
                     <div class="text-center text-warning">
                         <p class="fs-5">슬라이드를 불러올 수 없습니다.</p>
-                        <p class="small">파일 경로: ${slides[index]}</p>
+                        <p class="small">파일 경로: ${currentSlideUrl}</p>
                         <p class="small mt-2">파일이 존재하는지 확인해주세요.</p>
                     </div>
                 `;
@@ -244,41 +242,67 @@
             updateSlideCounter();
         }
 
-        // 서버에서 슬라이드 상태 가져오기
-        async function fetchSlideState() {
-            try {
-                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}`, { cache: 'no-store' });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+        // SSE 연결 시작
+        function connectSSE() {
+            if (eventSource) {
+                eventSource.close();
+            }
 
-                const data = await response.json();
-                let changed = false;
+            const sseUrl = `/api/slide?classId=${encodeURIComponent(classId)}`;
+            eventSource = new EventSource(sseUrl);
 
-                // 레슨이 변경되었는지 확인
-                if (data.lessonId && data.lessonId !== currentLessonId) {
-                    currentLessonId = data.lessonId;
-                    changed = true;
-                }
-
-                // 슬라이드 인덱스가 변경되었는지 확인
-                if (typeof data.slideIndex === 'number' && data.slideIndex !== currentSlideIndex) {
-                    currentSlideIndex = data.slideIndex;
-                    changed = true;
-                }
-
-                // 변경사항이 있으면 렌더링
-                if (changed) {
-                    renderSlide();
-                }
-
+            eventSource.onopen = () => {
+                console.log('SSE 연결 성공');
                 updateSyncStatus(true);
-                return true;
-            } catch (error) {
-                console.error('상태 가져오기 오류:', error);
+            };
+
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    let changed = false;
+
+                    // 레슨이 변경되었는지 확인
+                    if (data.lessonId && data.lessonId !== currentLessonId) {
+                        currentLessonId = data.lessonId;
+                        changed = true;
+                    }
+
+                    // 슬라이드 인덱스가 변경되었는지 확인
+                    if (typeof data.slideIndex === 'number' && data.slideIndex !== currentSlideIndex) {
+                        currentSlideIndex = data.slideIndex;
+                        changed = true;
+                    }
+
+                    // 변경사항이 있으면 렌더링
+                    if (changed) {
+                        renderSlide();
+                    }
+
+                    updateSyncStatus(true);
+                } catch (error) {
+                    console.error('SSE 메시지 파싱 오류:', error);
+                }
+            };
+
+            eventSource.onerror = (error) => {
+                console.error('SSE 연결 오류:', error);
                 updateSyncStatus(false);
-                return false;
+                
+                // 자동 재연결 (3초 후)
+                setTimeout(() => {
+                    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+                        console.log('SSE 재연결 시도...');
+                        connectSSE();
+                    }
+                }, 3000);
+            };
+        }
+
+        // SSE 연결 종료
+        function disconnectSSE() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
             }
         }
 
@@ -302,28 +326,12 @@
             document.getElementById('lessonInfo').textContent = `[${currentLessonId}]`;
         }
 
-        // 폴링 시작 (4초 간격)
-        function startPolling() {
-            // 4초마다 폴링
-            pollingInterval = setInterval(() => {
-                fetchSlideState();
-            }, 4000);
-        }
-
-        // 폴링 중지
-        function stopPolling() {
-            if (pollingInterval) {
-                clearInterval(pollingInterval);
-                pollingInterval = null;
-            }
-        }
-
-        // 페이지 가시성 변경 시 폴링 제어
+        // 페이지 가시성 변경 시 SSE 제어
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                stopPolling();
+                disconnectSSE();
             } else {
-                startPolling();
+                connectSSE();
             }
         });
 
@@ -333,8 +341,8 @@
                 return;
             }
 
-            // 모든 레슨 자동 감지
-            LESSONS = await detectAllLessons();
+            // API에서 모든 레슨 가져오기
+            LESSONS = await fetchAllLessons();
             
             if (Object.keys(LESSONS).length === 0) {
                 document.getElementById('slideDisplay').innerHTML = `
@@ -346,17 +354,16 @@
                 return;
             }
 
-            // 처음 한 번 상태 가져오기
-            await fetchSlideState();
-            renderSlide();
+            // SSE 연결 시작
+            connectSSE();
             
-            // 4초마다 교사 상태 따라가기
-            startPolling();
+            // 초기 슬라이드 렌더링 (SSE에서 상태를 받을 때까지 대기)
+            // SSE의 초기 메시지에서 상태를 받으면 자동으로 renderSlide()가 호출됨
         }
 
         // 페이지 언로드 시 정리
         window.addEventListener('beforeunload', () => {
-            stopPolling();
+            disconnectSSE();
         });
 
         // 페이지 로드 시 초기화
