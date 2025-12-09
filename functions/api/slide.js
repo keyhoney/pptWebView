@@ -10,10 +10,15 @@
 // 실제 운영 환경에서는 Durable Objects나 KV를 사용하는 것이 권장됩니다.
 export const connectedClients = new Map(); // Map<classId, Set<ReadableStreamDefaultController>>
 
-// 학생 수 조회 헬퍼 함수
+// 학생 수 조회 헬퍼 함수 (slide.js의 connectedClients 사용)
 export function getStudentCount(classId) {
   const clients = connectedClients.get(classId);
   return clients ? clients.size : 0;
+}
+
+// students.js와의 통합을 위한 함수 (동일한 Map 사용)
+export function getConnectedClients() {
+  return connectedClients;
 }
 
 // SSE 연결 관리 헬퍼 함수
@@ -66,9 +71,28 @@ export async function onRequestGet(context) {
     );
   }
 
-  // SSE 요청 확인
-  const acceptHeader = request.headers.get("Accept");
-  if (acceptHeader && acceptHeader.includes("text/event-stream")) {
+  // 학생 수 조회 요청 확인
+  if (url.searchParams.get("students") === "true") {
+    const count = getStudentCount(classId);
+    return new Response(
+      JSON.stringify({ count }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      }
+    );
+  }
+
+  // SSE 요청 확인 (URL 파라미터 또는 Accept 헤더로 구분)
+  const isSSE = url.searchParams.get("sse") === "true" || 
+                (request.headers.get("Accept") && request.headers.get("Accept").includes("text/event-stream"));
+  
+  if (isSSE) {
     // SSE 스트림 생성
     const stream = new ReadableStream({
       start(controller) {
@@ -100,17 +124,34 @@ export async function onRequestGet(context) {
           }
         })();
 
-        // 연결 종료 시 클라이언트 제거
-        request.signal.addEventListener("abort", () => {
+        // Heartbeat 전송 (30초마다 연결 유지)
+        const heartbeatInterval = setInterval(() => {
+          try {
+            const heartbeat = `: heartbeat\n\n`;
+            controller.enqueue(new TextEncoder().encode(heartbeat));
+          } catch (error) {
+            // 연결이 끊어진 경우
+            clearInterval(heartbeatInterval);
+            removeClient(classId, controller);
+          }
+        }, 30000);
+
+        // 연결 종료 시 클라이언트 제거 및 정리
+        const cleanup = () => {
+          clearInterval(heartbeatInterval);
           removeClient(classId, controller);
           try {
             controller.close();
           } catch (e) {
             // 이미 닫혔을 수 있음
           }
-        });
+        };
+
+        request.signal.addEventListener("abort", cleanup);
       },
       cancel(controller) {
+        // heartbeatInterval은 클로저에 있으므로 여기서는 정리할 수 없음
+        // start 함수 내에서 cleanup 함수로 처리됨
         removeClient(classId, controller);
       },
     });

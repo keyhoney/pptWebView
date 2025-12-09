@@ -248,7 +248,7 @@
                 eventSource.close();
             }
 
-            const sseUrl = `/api/slide?classId=${encodeURIComponent(classId)}`;
+            const sseUrl = `/api/slide?classId=${encodeURIComponent(classId)}&sse=true`;
             eventSource = new EventSource(sseUrl);
 
             eventSource.onopen = () => {

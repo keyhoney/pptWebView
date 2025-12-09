@@ -415,10 +415,10 @@
             });
         }
 
-        // 학생 수 조회
+        // 학생 수 조회 (slide.js의 connectedClients 사용)
         async function fetchStudentCount() {
             try {
-                const response = await fetch(`/api/students?classId=${encodeURIComponent(classId)}`, { cache: 'no-store' });
+                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}&students=true`, { cache: 'no-store' });
                 if (response.ok) {
                     const data = await response.json();
                     document.getElementById('studentCount').textContent = `${data.count}명`;
