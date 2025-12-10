@@ -404,10 +404,11 @@
             eventSource.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    let changed = false;
+                let changed = false;
 
                     // 이해도 체크 메시지 처리
                     if (data.type === 'understandingCheck' && data.check) {
+                        console.log('[SSE] 이해도 체크 메시지 수신:', data);
                         handleUnderstandingCheckFromSSE(data.check);
                         sseConnected = true;
                         updateSyncStatus(true);
@@ -416,6 +417,7 @@
 
                     // 퀴즈 메시지 처리
                     if (data.type === 'quiz' && data.quiz) {
+                        console.log('[SSE] 퀴즈 메시지 수신:', data);
                         handleQuizFromSSE(data.quiz);
                         sseConnected = true;
                         updateSyncStatus(true);
@@ -428,33 +430,33 @@
                         return;
                     }
 
-                    // 레슨이 변경되었는지 확인
-                    if (data.lessonId && data.lessonId !== currentLessonId) {
+                // 레슨이 변경되었는지 확인
+                if (data.lessonId && data.lessonId !== currentLessonId) {
                         clearPreviousLessonCache(data.lessonId);
-                        currentLessonId = data.lessonId;
-                        changed = true;
-                    }
+                    currentLessonId = data.lessonId;
+                    changed = true;
+                }
 
-                    // 슬라이드 인덱스가 변경되었는지 확인
-                    if (typeof data.slideIndex === 'number' && data.slideIndex !== currentSlideIndex) {
-                        currentSlideIndex = data.slideIndex;
-                        changed = true;
-                    }
+                // 슬라이드 인덱스가 변경되었는지 확인
+                if (typeof data.slideIndex === 'number' && data.slideIndex !== currentSlideIndex) {
+                    currentSlideIndex = data.slideIndex;
+                    changed = true;
+                }
 
                     // 타임스탬프 업데이트
                     if (data.timestamp) {
                         lastSyncTimestamp = data.timestamp;
-                    }
+                }
 
-                    // 변경사항이 있으면 렌더링
-                    if (changed) {
+                // 변경사항이 있으면 렌더링
+                if (changed) {
                         console.log('[SSE 동기화] 레슨:', currentLessonId, '슬라이드:', currentSlideIndex, '타임스탬프:', lastSyncTimestamp);
-                        renderSlide();
-                    }
+                    renderSlide();
+                }
 
                     sseConnected = true;
-                    updateSyncStatus(true);
-                } catch (error) {
+                updateSyncStatus(true);
+            } catch (error) {
                     console.error('SSE 메시지 파싱 오류:', error);
                 }
             };
@@ -492,7 +494,7 @@
                             connectSSE();
                         } else if (sseReconnectAttempts >= 10) {
                             console.error('[SSE] 재연결 실패 (최대 시도 횟수 초과), 폴링에 의존');
-                            updateSyncStatus(false);
+                updateSyncStatus(false);
                         }
                     }, delay);
                 }
@@ -567,10 +569,10 @@
             }
             
             visibilityTimeout = setTimeout(() => {
-                if (document.hidden) {
+            if (document.hidden) {
                     // 탭이 숨겨지면 연결 유지 (서버 측 타임아웃으로 정리됨)
                     console.log('[가시성] 탭 숨김, SSE 연결 유지');
-                } else {
+            } else {
                     // 탭이 다시 보이면 즉시 동기화 + SSE 연결 확인
                     console.log('[가시성] 탭 활성화, 즉시 동기화 실행');
                     
@@ -674,23 +676,35 @@
         function handleUnderstandingCheckFromSSE(checkData) {
             console.log('[SSE] 이해도 체크 수신:', checkData);
             
+            if (!checkData) {
+                console.error('[SSE] 이해도 체크 데이터가 없습니다');
+                return;
+            }
+            
             if (checkData.active) {
                 // 체크 활성화
                 isUnderstandingCheckActive = true;
                 currentUnderstandingCheck = checkData;
+                console.log('[SSE] 이해도 체크 활성화:', '현재 슬라이드:', currentSlideIndex, '체크 슬라이드:', checkData.slideIndex);
                 
                 // 현재 슬라이드와 관련된 체크인지 확인
                 if (checkData.slideIndex === currentSlideIndex) {
                     const checkId = `${checkData.slideIndex}_${checkData.startedAt}`;
                     if (!answeredUnderstandingChecks.has(checkId)) {
+                        console.log('[SSE] 이해도 체크 모달 표시 시도');
                         showUnderstandingModal();
+                    } else {
+                        console.log('[SSE] 이미 답변한 이해도 체크');
                     }
+                } else {
+                    console.log('[SSE] 현재 슬라이드와 불일치, 체크 슬라이드:', checkData.slideIndex, '현재:', currentSlideIndex);
                 }
                 
                 // 조건부 폴링 시작 (체크 활성화 시에만 5초마다)
                 startUnderstandingCheckPolling();
             } else {
                 // 체크 비활성화
+                console.log('[SSE] 이해도 체크 비활성화');
                 isUnderstandingCheckActive = false;
                 currentUnderstandingCheck = null;
                 hideUnderstandingModal();
@@ -761,23 +775,60 @@
         function showUnderstandingModal() {
             const understandingModalElement = document.getElementById('understandingModal');
             
-            // 이미 모달이 열려있거나 배경이 있으면 새로 열지 않음
-            const existingModal = bootstrap.Modal.getInstance(understandingModalElement);
-            const existingBackdrop = document.querySelector('.modal-backdrop');
-            
-            if ((existingModal && existingModal._isShown) || existingBackdrop) {
+            if (!understandingModalElement) {
+                console.error('[이해도 체크] 모달 요소를 찾을 수 없습니다');
                 return;
             }
 
+            // 기존 모달 인스턴스 정리
+            const existingModal = bootstrap.Modal.getInstance(understandingModalElement);
             if (existingModal) {
+                // 모달이 열려있으면 먼저 닫기
+                if (existingModal._isShown) {
+                    existingModal.hide();
+                    // 모달이 완전히 닫힐 때까지 대기
+                    understandingModalElement.addEventListener('hidden.bs.modal', function onHidden() {
+                        understandingModalElement.removeEventListener('hidden.bs.modal', onHidden);
+                        openUnderstandingModal();
+                    }, { once: true });
+                    return;
+                }
                 existingModal.dispose();
             }
 
+            // 배경 제거
+            const backdrops = document.querySelectorAll('.modal-backdrop');
+            backdrops.forEach(backdrop => backdrop.remove());
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+
+            openUnderstandingModal();
+        }
+
+        // 이해도 체크 모달 열기 (내부 함수)
+        function openUnderstandingModal() {
+            const understandingModalElement = document.getElementById('understandingModal');
+            
+            // 새 모달 인스턴스 생성
             const understandingModal = new bootstrap.Modal(understandingModalElement, {
                 backdrop: 'static',
-                keyboard: false
+                keyboard: false,
+                focus: true
             });
+            
+            // 모달이 완전히 표시된 후 포커스 설정
+            understandingModalElement.addEventListener('shown.bs.modal', function onShown() {
+                understandingModalElement.removeEventListener('shown.bs.modal', onShown);
+                // 첫 번째 버튼에 포커스 (aria-hidden 문제 방지)
+                const firstButton = understandingModalElement.querySelector('.btn-success');
+                if (firstButton) {
+                    setTimeout(() => firstButton.focus(), 100);
+                }
+            }, { once: true });
+            
             understandingModal.show();
+            console.log('[이해도 체크] 모달 표시');
         }
 
         // 이해도 체크 모달 닫기
@@ -841,22 +892,34 @@
         function handleQuizFromSSE(quizData) {
             console.log('[SSE] 퀴즈 수신:', quizData);
             
+            if (!quizData) {
+                console.error('[SSE] 퀴즈 데이터가 없습니다');
+                return;
+            }
+            
             if (quizData.active) {
                 // 퀴즈 활성화
                 isQuizActive = true;
+                console.log('[SSE] 퀴즈 활성화:', quizData.quizId, '현재 슬라이드:', currentSlideIndex, '퀴즈 슬라이드:', quizData.slideIndex);
                 
-                // 현재 슬라이드와 관련된 퀴즈인지 확인
-                if (quizData.slideIndex === currentSlideIndex || quizData.slideIndex === null) {
+                // 현재 슬라이드와 관련된 퀴즈인지 확인 (slideIndex가 null이면 모든 슬라이드에 표시)
+                if (quizData.slideIndex === null || quizData.slideIndex === currentSlideIndex) {
                     if (!answeredQuizIds.has(quizData.quizId)) {
+                        console.log('[SSE] 퀴즈 모달 표시 시도:', quizData.quizId);
                         currentQuiz = quizData;
                         displayQuiz(quizData);
+                    } else {
+                        console.log('[SSE] 이미 답변한 퀴즈:', quizData.quizId);
                     }
+                } else {
+                    console.log('[SSE] 현재 슬라이드와 불일치, 퀴즈 슬라이드:', quizData.slideIndex, '현재:', currentSlideIndex);
                 }
                 
                 // 조건부 폴링 시작 (퀴즈 활성화 시에만 5초마다)
                 startQuizPolling();
             } else {
                 // 퀴즈 비활성화
+                console.log('[SSE] 퀴즈 비활성화:', quizData.quizId);
                 isQuizActive = false;
                 currentQuiz = null;
                 hideQuizPanel();
@@ -943,23 +1006,53 @@
         function displayQuiz(quiz) {
             const quizModalElement = document.getElementById('quizModal');
             
-            // 이미 모달이 열려있거나 배경이 있으면 새로 열지 않음 (중복 방지)
-            const existingModal = bootstrap.Modal.getInstance(quizModalElement);
-            const existingBackdrop = document.querySelector('.modal-backdrop');
-            
-            if ((existingModal && existingModal._isShown) || existingBackdrop) {
-                console.log('모달이 이미 열려있어서 무시합니다.');
-                return; // 이미 열려있으면 무시
+            if (!quizModalElement) {
+                console.error('[퀴즈] 모달 요소를 찾을 수 없습니다');
+                return;
             }
 
-            // 기존 모달 인스턴스가 있으면 제거
+            if (!quiz || !quiz.question || !quiz.options || quiz.options.length === 0) {
+                console.error('[퀴즈] 유효하지 않은 퀴즈 데이터:', quiz);
+                return;
+            }
+
+            // 기존 모달 인스턴스 정리
+            const existingModal = bootstrap.Modal.getInstance(quizModalElement);
             if (existingModal) {
+                // 모달이 열려있으면 먼저 닫기
+                if (existingModal._isShown) {
+                    existingModal.hide();
+                    // 모달이 완전히 닫힐 때까지 대기
+                    quizModalElement.addEventListener('hidden.bs.modal', function onHidden() {
+                        quizModalElement.removeEventListener('hidden.bs.modal', onHidden);
+                        openQuizModal(quiz);
+                    }, { once: true });
+                    return;
+                }
                 existingModal.dispose();
             }
 
+            // 배경 제거
+            const backdrops = document.querySelectorAll('.modal-backdrop');
+            backdrops.forEach(backdrop => backdrop.remove());
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+
+            openQuizModal(quiz);
+        }
+
+        // 퀴즈 모달 열기 (내부 함수)
+        function openQuizModal(quiz) {
+            const quizModalElement = document.getElementById('quizModal');
             const quizQuestion = document.getElementById('quizQuestion');
             const quizOptions = document.getElementById('quizOptions');
             
+            if (!quizQuestion || !quizOptions) {
+                console.error('[퀴즈] 모달 내부 요소를 찾을 수 없습니다');
+                return;
+            }
+
             // 질문과 선택지 설정
             quizQuestion.textContent = quiz.question;
             quizOptions.innerHTML = '';
@@ -977,18 +1070,25 @@
                 quizOptions.appendChild(optionDiv);
             });
 
-            // 새 모달 인스턴스 생성 및 표시
+            // 새 모달 인스턴스 생성
             const quizModal = new bootstrap.Modal(quizModalElement, {
                 backdrop: 'static',
-                keyboard: false
+                keyboard: false,
+                focus: true
             });
             
-            // 모달이 완전히 닫힌 후에만 새로 열기
-            quizModalElement.addEventListener('hidden.bs.modal', function onHidden() {
-                quizModalElement.removeEventListener('hidden.bs.modal', onHidden);
+            // 모달이 완전히 표시된 후 포커스 설정
+            quizModalElement.addEventListener('shown.bs.modal', function onShown() {
+                quizModalElement.removeEventListener('shown.bs.modal', onShown);
+                // 첫 번째 라디오 버튼에 포커스 (aria-hidden 문제 방지)
+                const firstRadio = quizModalElement.querySelector('.form-check-input');
+                if (firstRadio) {
+                    setTimeout(() => firstRadio.focus(), 100);
+                }
             }, { once: true });
             
             quizModal.show();
+            console.log('[퀴즈] 모달 표시:', quiz.question);
         }
 
 
