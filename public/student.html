@@ -59,23 +59,7 @@
 </head>
 <body>
     <div class="container-fluid slide-container">
-        <!-- 다운로드 버튼 및 이해도 체크 영역 -->
-        <div class="status-bar mb-3 text-center">
-            <a href="https://downapi.cafe.naver.com/v1.0/cafes/article/file/d34d32f1-d3f7-11f0-8eb5-0050569eefb1/download" 
-               class="btn btn-primary me-2" download>
-                📥 1단원 다운로드
-            </a>
-
-            <a href="https://downapi.cafe.naver.com/v1.0/cafes/article/file/d56934df-d3f7-11f0-8ef7-0050569edfd8/download" 
-               class="btn btn-success me-2" download>
-                📥 2단원 다운로드
-            </a>
-
-            <a href="https://downapi.cafe.naver.com/v1.0/cafes/article/file/d79b7e5a-d3f7-11f0-87ae-0050569e26ec/download" 
-               class="btn btn-warning" download>
-                📥 3단원 다운로드
-            </a>
-        </div>
+        
         <div class="status-bar">
             <div class="row align-items-center">
                 <div class="col-md-6 mb-2 mb-md-0">
@@ -100,6 +84,24 @@
                 </div>
                 <p class="mt-3 text-muted" id="loadingText">슬라이드를 불러오는 중...</p>
             </div>
+        </div>
+
+        <!-- 다운로드 버튼 영역 (하단으로 이동됨) -->
+        <div class="status-bar mt-3 text-center">
+            <a href="https://downapi.cafe.naver.com/v1.0/cafes/article/file/d34d32f1-d3f7-11f0-8eb5-0050569eefb1/download" 
+               class="btn btn-primary me-2" download>
+                📥 1단원 다운로드
+            </a>
+
+            <a href="https://downapi.cafe.naver.com/v1.0/cafes/article/file/d56934df-d3f7-11f0-8ef7-0050569edfd8/download" 
+               class="btn btn-success me-2" download>
+                📥 2단원 다운로드
+            </a>
+
+            <a href="https://downapi.cafe.naver.com/v1.0/cafes/article/file/d79b7e5a-d3f7-11f0-87ae-0050569e26ec/download" 
+               class="btn btn-warning" download>
+                📥 3단원 다운로드
+            </a>
         </div>
 
     </div>
@@ -370,12 +372,12 @@
                     eventSource.close();
                     eventSource = null;
                     
-                    // 자동 재연결 (3초 후)
+                    // 자동 재연결 (1초 후 - 더 빠르게)
                     setTimeout(() => {
                         if (!eventSource) {
                             connectSSE();
                         }
-                    }, 3000);
+                    }, 1000);
                 }
             };
         }
@@ -444,6 +446,36 @@
             }, 1000);
         });
 
+        // 서버에서 최신 상태 조회 (SSE 보조용 폴링)
+        async function fetchStateFromServer() {
+            try {
+                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}`, { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    let changed = false;
+
+                    if (data.lessonId && data.lessonId !== currentLessonId) {
+                        currentLessonId = data.lessonId;
+                        changed = true;
+                    }
+                    if (typeof data.slideIndex === 'number' && data.slideIndex !== currentSlideIndex) {
+                        currentSlideIndex = data.slideIndex;
+                        changed = true;
+                    }
+
+                    if (changed) {
+                        console.log('서버 상태 동기화(폴링)로 변경 감지');
+                        renderSlide();
+                        // 퀴즈와 이해도 체크도 확인
+                        fetchActiveQuiz();
+                        fetchActiveUnderstandingCheck();
+                    }
+                }
+            } catch (error) {
+                console.error('서버 상태 조회 오류:', error);
+            }
+        }
+
         // 초기화
         async function init() {
             if (!getClassId()) {
@@ -465,6 +497,12 @@
 
             // SSE 연결 시작
             connectSSE();
+            
+            // 초기 상태 조회 (즉시)
+            fetchStateFromServer();
+
+            // 안정성을 위한 주기적 상태 확인 (3초마다 백업 폴링)
+            setInterval(fetchStateFromServer, 3000);
             
             // 초기 슬라이드 렌더링 (SSE에서 상태를 받을 때까지 대기)
             // SSE의 초기 메시지에서 상태를 받으면 자동으로 renderSlide()가 호출됨
@@ -751,11 +789,12 @@
             }
         }
 
-        // 슬라이드 변경 시 퀴즈 확인
+        // 슬라이드 변경 시 퀴즈 및 이해도 체크 확인
         const originalRenderSlide = renderSlide;
         renderSlide = function() {
             originalRenderSlide();
             fetchActiveQuiz();
+            fetchActiveUnderstandingCheck();
         };
 
         // 페이지 언로드 시 정리
@@ -767,8 +806,11 @@
         // 페이지 로드 시 초기화
         init();
         
-        // 퀴즈 조회 시작 (3초마다)
-        setInterval(fetchActiveQuiz, 3000);
+        // 퀴즈 조회 시작 (1.5초마다)
+        setInterval(fetchActiveQuiz, 1500);
+        
+        // 이해도 체크 조회 시작 (1.5초마다)
+        setInterval(fetchActiveUnderstandingCheck, 1500);
     </script>
 </body>
 </html>

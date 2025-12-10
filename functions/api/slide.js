@@ -152,8 +152,8 @@ export async function onRequestGet(context) {
           }
         })();
 
-        // Heartbeat 전송 (30초마다 연결 유지)
-        // 연결 타임아웃 추적 (60초 동안 heartbeat가 없으면 제거)
+        // Heartbeat 전송 (15초마다 연결 유지)
+        // 연결 타임아웃 추적 (30초 동안 heartbeat가 없으면 제거)
         let lastHeartbeatTime = Date.now();
         const heartbeatInterval = setInterval(() => {
           try {
@@ -166,13 +166,13 @@ export async function onRequestGet(context) {
             clearInterval(heartbeatInterval);
             removeClient(classId, controller);
           }
-        }, 30000);
+        }, 15000);
         
-        // 연결 타임아웃 체크 (90초마다)
+        // 연결 타임아웃 체크 (45초마다)
         const timeoutCheckInterval = setInterval(() => {
           const timeSinceLastHeartbeat = Date.now() - lastHeartbeatTime;
-          if (timeSinceLastHeartbeat > 90000) {
-            // 90초 동안 heartbeat가 없으면 연결이 끊어진 것으로 간주
+          if (timeSinceLastHeartbeat > 45000) {
+            // 45초 동안 heartbeat가 없으면 연결이 끊어진 것으로 간주
             console.log(`[SSE] 연결 타임아웃, 제거: classId=${classId}, 마지막 heartbeat=${timeSinceLastHeartbeat}ms 전`);
             clearInterval(heartbeatInterval);
             clearInterval(timeoutCheckInterval);
@@ -183,7 +183,7 @@ export async function onRequestGet(context) {
               // 이미 닫혔을 수 있음
             }
           }
-        }, 90000);
+        }, 45000);
 
         // 연결 종료 시 클라이언트 제거 및 정리
         const cleanup = () => {
