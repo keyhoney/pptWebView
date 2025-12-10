@@ -27,16 +27,41 @@ function addClient(classId, controller) {
     connectedClients.set(classId, new Set());
   }
   connectedClients.get(classId).add(controller);
+  
+  // 디버깅: 연결 수 로그
+  const count = connectedClients.get(classId).size;
+  console.log(`[SSE] 클라이언트 추가: classId=${classId}, 현재 연결 수=${count}`);
 }
 
 function removeClient(classId, controller) {
   if (!classId || !controller) return;
   const clients = connectedClients.get(classId);
   if (clients) {
+    const beforeSize = clients.size;
     clients.delete(controller);
+    const afterSize = clients.size;
+    
+    // 디버깅: 제거 로그
+    if (beforeSize !== afterSize) {
+      console.log(`[SSE] 클라이언트 제거: classId=${classId}, 이전=${beforeSize}, 현재=${afterSize}`);
+    }
+    
     if (clients.size === 0) {
       connectedClients.delete(classId);
     }
+  }
+}
+
+// 끊어진 연결 정리 함수 (heartbeat 실패 시 자동 제거되므로 여기서는 로그만)
+function cleanupDisconnectedClients(classId) {
+  const clients = connectedClients.get(classId);
+  if (!clients) return;
+  
+  // 실제 정리는 heartbeat 실패 시 자동으로 이루어지므로
+  // 여기서는 현재 상태만 로그로 기록
+  const count = clients.size;
+  if (count > 0) {
+    console.log(`[SSE] 현재 활성 연결 수: classId=${classId}, 연결 수=${count}`);
   }
 }
 
@@ -73,7 +98,10 @@ export async function onRequestGet(context) {
 
   // 학생 수 조회 요청 확인
   if (url.searchParams.get("students") === "true") {
+    // 조회 전에 끊어진 연결 정리
+    cleanupDisconnectedClients(classId);
     const count = getStudentCount(classId);
+    console.log(`[학생 수 조회] classId=${classId}, 연결 수=${count}`);
     return new Response(
       JSON.stringify({ count }),
       {
@@ -125,20 +153,43 @@ export async function onRequestGet(context) {
         })();
 
         // Heartbeat 전송 (30초마다 연결 유지)
+        // 연결 타임아웃 추적 (60초 동안 heartbeat가 없으면 제거)
+        let lastHeartbeatTime = Date.now();
         const heartbeatInterval = setInterval(() => {
           try {
             const heartbeat = `: heartbeat\n\n`;
             controller.enqueue(new TextEncoder().encode(heartbeat));
+            lastHeartbeatTime = Date.now();
           } catch (error) {
             // 연결이 끊어진 경우
+            console.log(`[SSE] Heartbeat 전송 실패, 연결 제거: classId=${classId}`);
             clearInterval(heartbeatInterval);
             removeClient(classId, controller);
           }
         }, 30000);
+        
+        // 연결 타임아웃 체크 (90초마다)
+        const timeoutCheckInterval = setInterval(() => {
+          const timeSinceLastHeartbeat = Date.now() - lastHeartbeatTime;
+          if (timeSinceLastHeartbeat > 90000) {
+            // 90초 동안 heartbeat가 없으면 연결이 끊어진 것으로 간주
+            console.log(`[SSE] 연결 타임아웃, 제거: classId=${classId}, 마지막 heartbeat=${timeSinceLastHeartbeat}ms 전`);
+            clearInterval(heartbeatInterval);
+            clearInterval(timeoutCheckInterval);
+            removeClient(classId, controller);
+            try {
+              controller.close();
+            } catch (e) {
+              // 이미 닫혔을 수 있음
+            }
+          }
+        }, 90000);
 
         // 연결 종료 시 클라이언트 제거 및 정리
         const cleanup = () => {
+          console.log(`[SSE] 연결 종료, 정리 시작: classId=${classId}`);
           clearInterval(heartbeatInterval);
+          clearInterval(timeoutCheckInterval);
           removeClient(classId, controller);
           try {
             controller.close();

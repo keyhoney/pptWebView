@@ -244,17 +244,35 @@
 
         // SSE 연결 시작
         function connectSSE() {
+            // 기존 연결이 있으면 완전히 정리
             if (eventSource) {
+                console.log('기존 SSE 연결 종료 중...');
                 eventSource.close();
+                eventSource = null;
+                // 서버 측 정리를 위해 잠시 대기
+                setTimeout(() => {
+                    createNewSSEConnection();
+                }, 500);
+            } else {
+                createNewSSEConnection();
             }
-
+        }
+        
+        // 새로운 SSE 연결 생성
+        function createNewSSEConnection() {
             const sseUrl = `/api/slide?classId=${encodeURIComponent(classId)}&sse=true`;
+            console.log('새로운 SSE 연결 생성:', sseUrl);
             eventSource = new EventSource(sseUrl);
 
             eventSource.onopen = () => {
                 console.log('SSE 연결 성공');
                 updateSyncStatus(true);
             };
+            
+            // heartbeat 메시지 무시
+            eventSource.addEventListener('heartbeat', () => {
+                // heartbeat는 무시 (연결 유지용)
+            });
 
             eventSource.onmessage = (event) => {
                 try {
@@ -285,22 +303,29 @@
             };
 
             eventSource.onerror = (error) => {
-                console.error('SSE 연결 오류:', error);
+                console.error('SSE 연결 오류:', error, 'readyState:', eventSource?.readyState);
                 updateSyncStatus(false);
                 
-                // 자동 재연결 (3초 후)
-                setTimeout(() => {
-                    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
-                        console.log('SSE 재연결 시도...');
-                        connectSSE();
-                    }
-                }, 3000);
+                // 연결이 완전히 끊어진 경우에만 재연결
+                if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+                    console.log('SSE 연결이 끊어짐, 재연결 시도...');
+                    eventSource.close();
+                    eventSource = null;
+                    
+                    // 자동 재연결 (3초 후)
+                    setTimeout(() => {
+                        if (!eventSource) {
+                            connectSSE();
+                        }
+                    }, 3000);
+                }
             };
         }
 
         // SSE 연결 종료
         function disconnectSSE() {
             if (eventSource) {
+                console.log('SSE 연결 명시적 종료');
                 eventSource.close();
                 eventSource = null;
             }
@@ -326,13 +351,25 @@
             document.getElementById('lessonInfo').textContent = `[${currentLessonId}]`;
         }
 
-        // 페이지 가시성 변경 시 SSE 제어
+        // 페이지 가시성 변경 시 SSE 제어 (연결 유지, 중복 방지)
+        let visibilityTimeout = null;
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                disconnectSSE();
-            } else {
-                connectSSE();
+            // 디바운싱: 빠른 탭 전환 시 중복 연결 방지
+            if (visibilityTimeout) {
+                clearTimeout(visibilityTimeout);
             }
+            
+            visibilityTimeout = setTimeout(() => {
+                if (document.hidden) {
+                    // 탭이 숨겨지면 연결 유지 (서버 측 타임아웃으로 정리됨)
+                    // disconnectSSE(); // 주석 처리: 연결 유지
+                } else {
+                    // 탭이 다시 보이면 연결 확인 (이미 연결되어 있으면 재연결 안 함)
+                    if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+                        connectSSE();
+                    }
+                }
+            }, 1000);
         });
 
         // 초기화
@@ -363,6 +400,7 @@
 
         // 페이지 언로드 시 정리
         window.addEventListener('beforeunload', () => {
+            console.log('페이지 언로드, SSE 연결 종료');
             disconnectSSE();
         });
 
