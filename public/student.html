@@ -59,7 +59,7 @@
 </head>
 <body>
     <div class="container-fluid slide-container">
-        <!-- 다운로드 버튼 영역 -->
+        <!-- 다운로드 버튼 및 이해도 체크 영역 -->
         <div class="status-bar mb-3 text-center">
             <a href="https://downapi.cafe.naver.com/v1.0/cafes/article/file/d34d32f1-d3f7-11f0-8eb5-0050569eefb1/download" 
                class="btn btn-primary me-2" download>
@@ -102,21 +102,6 @@
             </div>
         </div>
 
-        <!-- 이해도 체크 버튼 -->
-        <div class="status-bar mt-3">
-            <div class="text-center">
-                <h6 class="mb-3">이해도 체크</h6>
-                <div class="btn-group" role="group">
-                    <button type="button" class="btn btn-success btn-lg" id="understoodBtn" onclick="submitUnderstanding(true)">
-                        ✅ 이해했어요
-                    </button>
-                    <button type="button" class="btn btn-danger btn-lg" id="notUnderstoodBtn" onclick="submitUnderstanding(false)">
-                        ❌ 이해 안 돼요
-                    </button>
-                </div>
-            </div>
-        </div>
-
     </div>
 
     <!-- 퀴즈 모달 -->
@@ -125,7 +110,7 @@
             <div class="modal-content">
                 <div class="modal-header bg-primary text-white">
                     <h5 class="modal-title">📝 실시간 퀴즈</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <button type="button" class="btn-close btn-close-white" onclick="hideQuizPanel()" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <h6 id="quizQuestion" class="mb-3"></h6>
@@ -133,7 +118,30 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-primary" onclick="submitQuizAnswer()">답변 제출</button>
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+                    <button type="button" class="btn btn-secondary" onclick="hideQuizPanel()">닫기</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 이해도 체크 모달 -->
+    <div class="modal fade" id="understandingModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title">📊 이해도 체크</h5>
+                    <button type="button" class="btn-close btn-close-white" onclick="hideUnderstandingModal()" aria-label="Close"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <h6 class="mb-4">현재 슬라이드를 이해하셨나요?</h6>
+                    <div class="d-grid gap-2">
+                        <button type="button" class="btn btn-success btn-lg" onclick="submitUnderstandingFromModal(true)">
+                            ✅ 이해했어요
+                        </button>
+                        <button type="button" class="btn btn-danger btn-lg" onclick="submitUnderstandingFromModal(false)">
+                            ❌ 이해 안 돼요
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -151,6 +159,7 @@
         let studentId = null; // 학생 고유 ID
         let currentQuiz = null; // 현재 활성 퀴즈
         let selectedQuizAnswer = null; // 선택한 답변
+        let answeredQuizIds = new Set(); // 이미 답변한 퀴즈 ID 목록
 
         // URL에서 classId 읽기
         function getClassId() {
@@ -461,8 +470,81 @@
             // SSE의 초기 메시지에서 상태를 받으면 자동으로 renderSlide()가 호출됨
         }
 
-        // 이해도 체크 제출
-        async function submitUnderstanding(understood) {
+        // 활성 이해도 체크 조회
+        async function fetchActiveUnderstandingCheck() {
+            try {
+                const response = await fetch(`/api/understanding?classId=${encodeURIComponent(classId)}&checkActive=true`, { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.active && data.check) {
+                        // 현재 슬라이드와 관련된 체크인지 확인
+                        if (data.check.slideIndex === currentSlideIndex) {
+                            const checkId = `${data.check.slideIndex}_${data.check.startedAt}`;
+                            if (!answeredUnderstandingChecks.has(checkId)) {
+                                currentUnderstandingCheck = data.check;
+                                showUnderstandingModal();
+                            } else {
+                                hideUnderstandingModal();
+                            }
+                        } else {
+                            hideUnderstandingModal();
+                        }
+                    } else {
+                        hideUnderstandingModal();
+                    }
+                }
+            } catch (error) {
+                console.error('이해도 체크 조회 오류:', error);
+            }
+        }
+
+        // 이해도 체크 모달 표시
+        function showUnderstandingModal() {
+            const understandingModalElement = document.getElementById('understandingModal');
+            
+            // 이미 모달이 열려있거나 배경이 있으면 새로 열지 않음
+            const existingModal = bootstrap.Modal.getInstance(understandingModalElement);
+            const existingBackdrop = document.querySelector('.modal-backdrop');
+            
+            if ((existingModal && existingModal._isShown) || existingBackdrop) {
+                return;
+            }
+
+            if (existingModal) {
+                existingModal.dispose();
+            }
+
+            const understandingModal = new bootstrap.Modal(understandingModalElement, {
+                backdrop: 'static',
+                keyboard: false
+            });
+            understandingModal.show();
+        }
+
+        // 이해도 체크 모달 닫기
+        function hideUnderstandingModal() {
+            const understandingModalElement = document.getElementById('understandingModal');
+            const understandingModal = bootstrap.Modal.getInstance(understandingModalElement);
+            
+            if (understandingModal) {
+                understandingModal.hide();
+            }
+            
+            // 모달 배경 제거
+            const backdrops = document.querySelectorAll('.modal-backdrop');
+            backdrops.forEach(backdrop => backdrop.remove());
+            
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+            
+            currentUnderstandingCheck = null;
+        }
+
+        // 이해도 체크 제출 (모달에서)
+        async function submitUnderstandingFromModal(understood) {
+            if (!currentUnderstandingCheck) return;
+
             try {
                 const response = await fetch('/api/understanding', {
                     method: 'POST',
@@ -470,24 +552,26 @@
                     body: JSON.stringify({
                         classId,
                         studentId,
-                        slideIndex: currentSlideIndex,
-                        lessonId: currentLessonId,
+                        slideIndex: currentUnderstandingCheck.slideIndex,
+                        lessonId: currentUnderstandingCheck.lessonId,
                         understood,
                     }),
                 });
 
                 if (response.ok) {
-                    // 버튼 상태 업데이트
-                    if (understood) {
-                        document.getElementById('understoodBtn').classList.add('active');
-                        document.getElementById('notUnderstoodBtn').classList.remove('active');
-                    } else {
-                        document.getElementById('notUnderstoodBtn').classList.add('active');
-                        document.getElementById('understoodBtn').classList.remove('active');
-                    }
+                    // 답변한 체크 ID 기록
+                    const checkId = `${currentUnderstandingCheck.slideIndex}_${currentUnderstandingCheck.startedAt}`;
+                    answeredUnderstandingChecks.add(checkId);
+                    
+                    // 모달 닫기
+                    hideUnderstandingModal();
+                    showStatus('이해도 체크가 제출되었습니다!', 'success');
+                } else {
+                    alert('이해도 체크 제출에 실패했습니다.');
                 }
             } catch (error) {
                 console.error('이해도 체크 제출 오류:', error);
+                alert('이해도 체크 제출에 실패했습니다.');
             }
         }
 
@@ -500,9 +584,11 @@
                     if (data.quizzes && data.quizzes.length > 0) {
                         // 현재 슬라이드와 관련된 퀴즈 찾기
                         const relevantQuiz = data.quizzes.find(q => q.slideIndex === currentSlideIndex) || data.quizzes[0];
-                        if (relevantQuiz) {
+                        if (relevantQuiz && !answeredQuizIds.has(relevantQuiz.quizId)) {
+                            // 이미 답변한 퀴즈가 아니면 로드
                             await loadQuiz(relevantQuiz.quizId);
                         } else {
+                            // 이미 답변했거나 관련 퀴즈가 없으면 모달 닫기
                             hideQuizPanel();
                         }
                     } else {
@@ -515,6 +601,12 @@
         }
 
         async function loadQuiz(quizId) {
+            // 이미 답변한 퀴즈면 표시하지 않음
+            if (answeredQuizIds.has(quizId)) {
+                hideQuizPanel();
+                return;
+            }
+
             try {
                 const response = await fetch(`/api/quiz?classId=${encodeURIComponent(classId)}&quizId=${quizId}`, { cache: 'no-store' });
                 if (response.ok) {
@@ -532,71 +624,74 @@
         }
 
         function displayQuiz(quiz) {
-            const quizModal = new bootstrap.Modal(document.getElementById('quizModal'));
+            const quizModalElement = document.getElementById('quizModal');
+            
+            // 이미 모달이 열려있거나 배경이 있으면 새로 열지 않음 (중복 방지)
+            const existingModal = bootstrap.Modal.getInstance(quizModalElement);
+            const existingBackdrop = document.querySelector('.modal-backdrop');
+            
+            if ((existingModal && existingModal._isShown) || existingBackdrop) {
+                console.log('모달이 이미 열려있어서 무시합니다.');
+                return; // 이미 열려있으면 무시
+            }
+
+            // 기존 모달 인스턴스가 있으면 제거
+            if (existingModal) {
+                existingModal.dispose();
+            }
+
             const quizQuestion = document.getElementById('quizQuestion');
             const quizOptions = document.getElementById('quizOptions');
             
+            // 질문과 선택지 설정
             quizQuestion.textContent = quiz.question;
             quizOptions.innerHTML = '';
             selectedQuizAnswer = null;
 
-            if (quiz.type === 'yesno') {
-                quizOptions.innerHTML = `
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="radio" name="quizAnswer" id="quizYes" value="찬성" onchange="selectedQuizAnswer = '찬성'">
-                        <label class="form-check-label" for="quizYes">찬성</label>
-                    </div>
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="radio" name="quizAnswer" id="quizNo" value="반대" onchange="selectedQuizAnswer = '반대'">
-                        <label class="form-check-label" for="quizNo">반대</label>
-                    </div>
+            // 객관식 단일 선택만 지원
+            quiz.options.forEach((option, index) => {
+                const optionDiv = document.createElement('div');
+                optionDiv.className = 'form-check mb-2';
+                const optionId = `quizOption_${quiz.quizId}_${index}`;
+                optionDiv.innerHTML = `
+                    <input class="form-check-input" type="radio" name="quizAnswer_${quiz.quizId}" id="${optionId}" value="${index}" onchange="selectedQuizAnswer = ${index}">
+                    <label class="form-check-label" for="${optionId}">${option}</label>
                 `;
-            } else if (quiz.type === 'single') {
-                quiz.options.forEach((option, index) => {
-                    const optionDiv = document.createElement('div');
-                    optionDiv.className = 'form-check mb-2';
-                    optionDiv.innerHTML = `
-                        <input class="form-check-input" type="radio" name="quizAnswer" id="quizOption${index}" value="${index}" onchange="selectedQuizAnswer = ${index}">
-                        <label class="form-check-label" for="quizOption${index}">${option}</label>
-                    `;
-                    quizOptions.appendChild(optionDiv);
-                });
-            } else if (quiz.type === 'multiple') {
-                quiz.options.forEach((option, index) => {
-                    const optionDiv = document.createElement('div');
-                    optionDiv.className = 'form-check mb-2';
-                    optionDiv.innerHTML = `
-                        <input class="form-check-input" type="checkbox" id="quizOption${index}" value="${index}" onchange="updateMultipleAnswer(${index}, this.checked)">
-                        <label class="form-check-label" for="quizOption${index}">${option}</label>
-                    `;
-                    quizOptions.appendChild(optionDiv);
-                });
-                selectedQuizAnswer = [];
-            }
+                quizOptions.appendChild(optionDiv);
+            });
 
-            // 모달 표시
+            // 새 모달 인스턴스 생성 및 표시
+            const quizModal = new bootstrap.Modal(quizModalElement, {
+                backdrop: 'static',
+                keyboard: false
+            });
+            
+            // 모달이 완전히 닫힌 후에만 새로 열기
+            quizModalElement.addEventListener('hidden.bs.modal', function onHidden() {
+                quizModalElement.removeEventListener('hidden.bs.modal', onHidden);
+            }, { once: true });
+            
             quizModal.show();
         }
 
-        function updateMultipleAnswer(index, checked) {
-            if (!Array.isArray(selectedQuizAnswer)) {
-                selectedQuizAnswer = [];
-            }
-            if (checked) {
-                if (!selectedQuizAnswer.includes(index)) {
-                    selectedQuizAnswer.push(index);
-                }
-            } else {
-                selectedQuizAnswer = selectedQuizAnswer.filter(i => i !== index);
-            }
-        }
 
         function hideQuizPanel() {
             const quizModalElement = document.getElementById('quizModal');
             const quizModal = bootstrap.Modal.getInstance(quizModalElement);
+            
             if (quizModal) {
                 quizModal.hide();
             }
+            
+            // 모달 배경 제거 (즉시)
+            const backdrops = document.querySelectorAll('.modal-backdrop');
+            backdrops.forEach(backdrop => backdrop.remove());
+            
+            // body 클래스 정리
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+            
             currentQuiz = null;
             selectedQuizAnswer = null;
         }
@@ -620,12 +715,32 @@
                 });
 
                 if (response.ok) {
+                    // 답변한 퀴즈 ID 기록
+                    if (currentQuiz && currentQuiz.quizId) {
+                        answeredQuizIds.add(currentQuiz.quizId);
+                    }
+                    
                     // 모달 닫기
                     const quizModalElement = document.getElementById('quizModal');
                     const quizModal = bootstrap.Modal.getInstance(quizModalElement);
                     if (quizModal) {
                         quizModal.hide();
                     }
+                    
+                    // 모달 배경 제거 (중복 방지)
+                    const backdrop = document.querySelector('.modal-backdrop');
+                    if (backdrop) {
+                        backdrop.remove();
+                    }
+                    
+                    // body 클래스 정리
+                    document.body.classList.remove('modal-open');
+                    document.body.style.overflow = '';
+                    document.body.style.paddingRight = '';
+                    
+                    currentQuiz = null;
+                    selectedQuizAnswer = null;
+                    
                     showStatus('답변이 제출되었습니다!', 'success');
                 } else {
                     alert('답변 제출에 실패했습니다.');

@@ -14,55 +14,84 @@ async function checkSlideExists(baseUrl, lessonId, slideNum) {
   }
 }
 
-// 특정 레슨의 모든 슬라이드 찾기 (병렬 처리)
+// 특정 레슨의 모든 슬라이드 찾기 (배치 처리 + 조기 종료)
 async function findSlidesForLesson(baseUrl, lessonId, maxSlides = 100) {
   const slides = [];
-  const checkPromises = [];
-  
-  // 병렬로 여러 슬라이드 확인
-  for (let i = 1; i <= maxSlides; i++) {
-    checkPromises.push(
-      checkSlideExists(baseUrl, lessonId, i).then(exists => ({ num: i, exists }))
-    );
-  }
-  
-  const results = await Promise.all(checkPromises);
-  
-  // 존재하는 슬라이드만 수집
-  for (const result of results) {
-    if (result.exists) {
-      slides.push(`slides/${lessonId}/슬라이드${result.num}.JPG`);
-    } else if (slides.length > 0) {
-      // 연속된 슬라이드가 없으면 중단 (최적화)
-      // 하지만 일부 슬라이드가 누락될 수 있으므로 계속 확인
+  const batchSize = 10; // 한 번에 확인할 슬라이드 수
+  let emptyBatchCount = 0; // 빈 배치가 연속으로 나온 횟수
+
+  for (let i = 1; i <= maxSlides; i += batchSize) {
+    const checkPromises = [];
+    // 배치 크기만큼 요청 생성
+    for (let j = 0; j < batchSize; j++) {
+      const slideNum = i + j;
+      if (slideNum > maxSlides) break;
+      checkPromises.push(
+        checkSlideExists(baseUrl, lessonId, slideNum).then(exists => ({ num: slideNum, exists }))
+      );
+    }
+
+    // 배치 실행
+    const results = await Promise.all(checkPromises);
+    let foundInBatch = false;
+
+    for (const result of results) {
+      if (result.exists) {
+        slides.push(`slides/${lessonId}/슬라이드${result.num}.JPG`);
+        foundInBatch = true;
+      }
+    }
+
+    // 이번 배치에서 슬라이드를 하나도 못 찾았다면 탐색 중단 (최적화)
+    if (!foundInBatch) {
+      emptyBatchCount++;
+      // 연속으로 2번의 배치(20개 슬라이드)가 비어있으면 중단
+      if (emptyBatchCount >= 1) {
+        break;
+      }
+    } else {
+      emptyBatchCount = 0;
     }
   }
+  
+  // 슬라이드 번호 순으로 정렬 (병렬 처리로 순서가 섞일 수 있음)
+  // 파일명이 '슬라이드1.JPG', '슬라이드10.JPG' 등이므로 숫자 기준으로 정렬
+  slides.sort((a, b) => {
+    const numA = parseInt(a.match(/슬라이드(\d+)\.JPG/)[1]);
+    const numB = parseInt(b.match(/슬라이드(\d+)\.JPG/)[1]);
+    return numA - numB;
+  });
   
   return slides;
 }
 
-// 모든 레슨 찾기
+// 모든 레슨 찾기 (레슨별 병렬 처리 제한)
 async function findAllLessons(baseUrl, maxLessons = 20) {
   const lessons = {};
-  
-  // 병렬로 여러 레슨 확인
-  const lessonPromises = [];
-  for (let i = 1; i <= maxLessons; i++) {
-    const lessonId = `lesson${i}`;
-    lessonPromises.push(
-      findSlidesForLesson(baseUrl, lessonId).then(slides => ({
-        lessonId,
-        slides,
-      }))
-    );
-  }
-  
-  const results = await Promise.all(lessonPromises);
-  
-  // 슬라이드가 있는 레슨만 추가
-  for (const result of results) {
-    if (result.slides.length > 0) {
-      lessons[result.lessonId] = result.slides;
+  const lessonBatchSize = 5; // 한 번에 확인할 레슨 수
+
+  for (let i = 1; i <= maxLessons; i += lessonBatchSize) {
+    const lessonPromises = [];
+    
+    for (let j = 0; j < lessonBatchSize; j++) {
+      const lessonNum = i + j;
+      if (lessonNum > maxLessons) break;
+      
+      const lessonId = `lesson${lessonNum}`;
+      lessonPromises.push(
+        findSlidesForLesson(baseUrl, lessonId).then(slides => ({
+          lessonId,
+          slides,
+        }))
+      );
+    }
+
+    const results = await Promise.all(lessonPromises);
+    
+    for (const result of results) {
+      if (result.slides.length > 0) {
+        lessons[result.lessonId] = result.slides;
+      }
     }
   }
   

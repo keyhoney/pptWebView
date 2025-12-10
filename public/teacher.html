@@ -128,30 +128,32 @@
         <h5 class="mb-3">📚 수업 도구</h5>
         <ul class="nav flex-column">
             <li class="nav-item">
-                <a class="nav-link active" href="#" onclick="showQuizSection(); return false;">
-                    📝 실시간 퀴즈
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link" href="#" onclick="showUnderstandingSection(); return false;">
+                <a class="nav-link active" href="#" onclick="showUnderstandingSection(); return false;">
                     📊 이해도 체크
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#" onclick="showQuizSection(); return false;">
+                    📝 실시간 퀴즈
+                </a>
+            </li>
         </ul>
-        <div id="quizSection" class="mt-4">
-            <h6>퀴즈 관리</h6>
-            <button class="btn btn-primary btn-sm w-100 mb-2" onclick="showQuizModal()">퀴즈 생성</button>
-            <div id="quizResults"></div>
-        </div>
-        <div id="understandingSection" class="mt-4 d-none">
-            <h6>이해도 통계</h6>
-            <div id="understandingStats">
+        <div id="understandingSection" class="mt-4">
+            <h6>이해도 체크</h6>
+            <button class="btn btn-info btn-sm w-100 mb-2" onclick="startUnderstandingCheck()">이해도 체크 실시</button>
+            <button class="btn btn-secondary btn-sm w-100 mb-2 d-none" id="endUnderstandingBtn" onclick="endUnderstandingCheck()">이해도 체크 종료</button>
+            <div id="understandingStats" class="mt-2">
                 <div class="mb-2">
                     <span class="badge bg-success w-100 d-block mb-1" id="understoodCount">이해: 0명</span>
                     <span class="badge bg-danger w-100 d-block mb-1" id="notUnderstoodCount">이해 안 됨: 0명</span>
                     <span class="badge bg-info w-100 d-block" id="understandingPercentage">0%</span>
                 </div>
             </div>
+        </div>
+        <div id="quizSection" class="mt-4 d-none">
+            <h6>퀴즈 관리</h6>
+            <button class="btn btn-primary btn-sm w-100 mb-2" onclick="showQuizModal()">퀴즈 생성</button>
+            <div id="quizResults"></div>
         </div>
     </div>
 
@@ -236,14 +238,6 @@
                 </div>
                 <div class="modal-body">
                     <div class="mb-3">
-                        <label class="form-label">퀴즈 유형</label>
-                        <select class="form-select" id="quizType">
-                            <option value="yesno">찬반 투표</option>
-                            <option value="single">객관식 (단일 선택)</option>
-                            <option value="multiple">객관식 (다중 선택)</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
                         <label class="form-label">질문</label>
                         <input type="text" class="form-control" id="quizQuestion" placeholder="질문을 입력하세요">
                     </div>
@@ -288,6 +282,7 @@
         let currentQuizId = null; // 현재 활성 퀴즈 ID
         let quizResultInterval = null; // 퀴즈 결과 조회 인터벌
         let understandingInterval = null; // 이해도 통계 조회 인터벌
+        let currentUnderstandingCheckId = null; // 현재 활성 이해도 체크 ID
 
         // URL에서 classId 읽기
         function getClassId() {
@@ -595,7 +590,13 @@
             const select = document.getElementById('lessonSelect');
             select.innerHTML = '';
             
-            const lessonIds = Object.keys(LESSONS).sort();
+            const lessonIds = Object.keys(LESSONS).sort((a, b) => {
+                // lesson1, lesson2, lesson10 순서로 정렬
+                const numA = parseInt(a.replace('lesson', ''));
+                const numB = parseInt(b.replace('lesson', ''));
+                return numA - numB;
+            });
+
             if (lessonIds.length === 0) {
                 select.innerHTML = '<option value="">레슨을 찾을 수 없습니다</option>';
                 return;
@@ -604,9 +605,21 @@
             lessonIds.forEach(lessonId => {
                 const option = document.createElement('option');
                 option.value = lessonId;
-                option.textContent = lessonId.charAt(0).toUpperCase() + lessonId.slice(1).replace(/([A-Z])/g, ' $1');
+                option.textContent = lessonId.replace('lesson', '단원 ') + ' 슬라이드';
                 select.appendChild(option);
             });
+            
+            // 현재 선택된 레슨이 목록에 있으면 선택 유지
+            if (currentLessonId && lessonIds.includes(currentLessonId)) {
+                select.value = currentLessonId;
+            } else if (lessonIds.length > 0) {
+                // 없으면 첫 번째 레슨 선택
+                currentLessonId = lessonIds[0];
+                select.value = currentLessonId;
+                // 슬라이드 렌더링 갱신
+                currentSlideIndex = 0;
+                renderSlide();
+            }
         }
 
         // 초기화
@@ -615,8 +628,20 @@
                 return;
             }
 
+            // 로딩 상태 표시
+            const lessonSelect = document.getElementById('lessonSelect');
+            lessonSelect.innerHTML = '<option>수업 목록을 불러오는 중...</option>';
+            lessonSelect.disabled = true;
+
             // API에서 모든 레슨 가져오기
-            LESSONS = await fetchAllLessons();
+            try {
+                LESSONS = await fetchAllLessons();
+            } catch (error) {
+                console.error('초기화 중 오류:', error);
+                LESSONS = {};
+            } finally {
+                lessonSelect.disabled = false;
+            }
             
             if (Object.keys(LESSONS).length === 0) {
                 document.getElementById('slideDisplay').innerHTML = `
@@ -625,19 +650,13 @@
                         <p class="small">slides/lesson1/, slides/lesson2/ 등의 폴더에 슬라이드 이미지를 추가하세요.</p>
                     </div>
                 `;
+                lessonSelect.innerHTML = '<option value="">레슨 없음</option>';
                 return;
             }
 
             // 레슨 선택 드롭다운 채우기
             populateLessonSelect();
             
-            // 첫 번째 레슨을 기본값으로 설정
-            const firstLesson = Object.keys(LESSONS)[0];
-            if (firstLesson) {
-                currentLessonId = firstLesson;
-                document.getElementById('lessonSelect').value = currentLessonId;
-            }
-
             // 레슨 선택 변경 이벤트
             document.getElementById('lessonSelect').addEventListener('change', () => {
                 currentLessonId = document.getElementById('lessonSelect').value;
@@ -699,24 +718,19 @@
 
         async function createQuiz() {
             const question = document.getElementById('quizQuestion').value;
-            const type = document.getElementById('quizType').value;
             
             if (!question.trim()) {
                 alert('질문을 입력하세요.');
                 return;
             }
 
-            let options = [];
-            if (type !== 'yesno') {
-                const optionInputs = document.querySelectorAll('#quizOptionsList input');
-                options = Array.from(optionInputs).map(input => input.value.trim()).filter(v => v);
-                
-                if (options.length < 2) {
-                    alert('최소 2개의 선택지를 입력하세요.');
-                    return;
-                }
-            } else {
-                options = ['찬성', '반대'];
+            // 선택지 가져오기
+            const optionInputs = document.querySelectorAll('#quizOptionsList input');
+            const options = Array.from(optionInputs).map(input => input.value.trim()).filter(v => v);
+            
+            if (options.length < 2) {
+                alert('최소 2개의 선택지를 입력하세요.');
+                return;
             }
 
             const quizId = `quiz_${Date.now()}`;
@@ -730,7 +744,7 @@
                         quizId,
                         question,
                         options,
-                        type,
+                        type: 'single', // 항상 객관식 단일 선택
                         slideIndex: currentSlideIndex,
                     }),
                 });
@@ -742,7 +756,6 @@
                     
                     // 모달 초기화
                     document.getElementById('quizQuestion').value = '';
-                    document.getElementById('quizType').value = 'yesno';
                     document.getElementById('quizOptionsList').innerHTML = `
                         <div class="input-group mb-2">
                             <input type="text" class="form-control" placeholder="선택지 1">
@@ -780,22 +793,22 @@
         }
 
         // 좌측 사이드바 메뉴 전환
-        function showQuizSection() {
-            document.querySelectorAll('.left-sidebar .nav-link').forEach(link => {
-                link.classList.remove('active');
-            });
-            document.querySelector('.left-sidebar .nav-link:first-child').classList.add('active');
-            document.getElementById('quizSection').classList.remove('d-none');
-            document.getElementById('understandingSection').classList.add('d-none');
-        }
-
         function showUnderstandingSection() {
             document.querySelectorAll('.left-sidebar .nav-link').forEach(link => {
                 link.classList.remove('active');
             });
-            document.querySelectorAll('.left-sidebar .nav-link')[1].classList.add('active');
-            document.getElementById('quizSection').classList.add('d-none');
+            document.querySelector('.left-sidebar .nav-link:first-child').classList.add('active');
             document.getElementById('understandingSection').classList.remove('d-none');
+            document.getElementById('quizSection').classList.add('d-none');
+        }
+
+        function showQuizSection() {
+            document.querySelectorAll('.left-sidebar .nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            document.querySelectorAll('.left-sidebar .nav-link')[1].classList.add('active');
+            document.getElementById('understandingSection').classList.add('d-none');
+            document.getElementById('quizSection').classList.remove('d-none');
         }
 
         function displayQuizResults(data) {
@@ -914,6 +927,62 @@
                 }
             } catch (error) {
                 console.error('이해도 통계 조회 오류:', error);
+            }
+        }
+
+        // 이해도 체크 시작
+        async function startUnderstandingCheck() {
+            try {
+                const response = await fetch('/api/understanding?action=start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        classId,
+                        slideIndex: currentSlideIndex,
+                        lessonId: currentLessonId,
+                    }),
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    currentUnderstandingCheckId = `${currentSlideIndex}_${data.check.startedAt}`;
+                    showStatus('이해도 체크가 시작되었습니다!', 'success');
+                    
+                    // 버튼 상태 변경
+                    document.querySelector('#understandingSection button:first-of-type').classList.add('d-none');
+                    document.getElementById('endUnderstandingBtn').classList.remove('d-none');
+                    
+                    // 통계 조회 시작
+                    startUnderstandingPolling();
+                } else {
+                    showStatus('이해도 체크 시작에 실패했습니다.', 'danger');
+                }
+            } catch (error) {
+                console.error('이해도 체크 시작 오류:', error);
+                showStatus('이해도 체크 시작에 실패했습니다.', 'danger');
+            }
+        }
+
+        // 이해도 체크 종료
+        async function endUnderstandingCheck() {
+            try {
+                const response = await fetch(`/api/understanding?classId=${encodeURIComponent(classId)}`, {
+                    method: 'DELETE',
+                });
+
+                if (response.ok) {
+                    currentUnderstandingCheckId = null;
+                    showStatus('이해도 체크가 종료되었습니다.', 'success');
+                    
+                    // 버튼 상태 변경
+                    document.querySelector('#understandingSection button:first-of-type').classList.remove('d-none');
+                    document.getElementById('endUnderstandingBtn').classList.add('d-none');
+                } else {
+                    showStatus('이해도 체크 종료에 실패했습니다.', 'danger');
+                }
+            } catch (error) {
+                console.error('이해도 체크 종료 오류:', error);
+                showStatus('이해도 체크 종료에 실패했습니다.', 'danger');
             }
         }
 

@@ -1,14 +1,57 @@
 /**
  * 이해도 체크 API
- * POST: 이해도 체크 제출
- * GET: 이해도 통계 조회
+ * POST: 이해도 체크 제출 / 이해도 체크 시작
+ * GET: 이해도 통계 조회 / 활성 이해도 체크 조회
+ * DELETE: 이해도 체크 종료
  */
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  const url = new URL(request.url);
+  const action = url.searchParams.get("action");
 
   try {
     const body = await request.json();
+
+    if (action === "start") {
+      // 이해도 체크 시작
+      const { classId, slideIndex, lessonId } = body;
+
+      if (!classId || slideIndex === undefined) {
+        return new Response(
+          JSON.stringify({ error: "classId and slideIndex are required" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      const understandingCheckKey = `understanding:check:${classId}`;
+      const checkData = {
+        classId,
+        lessonId: lessonId || "default",
+        slideIndex,
+        active: true,
+        startedAt: Date.now(),
+      };
+
+      await env.SLIDES.put(
+        understandingCheckKey,
+        JSON.stringify(checkData),
+        { expirationTtl: 3600 } // 1시간 후 자동 삭제
+      );
+
+      return new Response(
+        JSON.stringify({ ok: true, check: checkData }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        }
+      );
+    }
+
+    // 이해도 체크 제출
     const { classId, studentId, slideIndex, lessonId, understood } = body;
 
     if (!classId || !studentId || slideIndex === undefined || understood === undefined) {
@@ -85,6 +128,7 @@ export async function onRequestGet(context) {
   const classId = url.searchParams.get("classId");
   const lessonId = url.searchParams.get("lessonId");
   const slideIndex = url.searchParams.get("slideIndex");
+  const checkActive = url.searchParams.get("checkActive") === "true";
 
   if (!classId) {
     return new Response(
@@ -94,7 +138,36 @@ export async function onRequestGet(context) {
   }
 
   try {
-    if (slideIndex !== null) {
+    if (checkActive) {
+      // 활성 이해도 체크 조회
+      const understandingCheckKey = `understanding:check:${classId}`;
+      const checkDataStr = await env.SLIDES.get(understandingCheckKey);
+      
+      if (!checkDataStr) {
+        return new Response(
+          JSON.stringify({ active: false }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "Access-Control-Allow-Origin": "*",
+            },
+          }
+        );
+      }
+
+      const checkData = JSON.parse(checkDataStr);
+      return new Response(
+        JSON.stringify({ active: checkData.active || false, check: checkData }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        }
+      );
+    } else if (slideIndex !== null) {
       // 특정 슬라이드의 이해도 통계
       const understandingKey = `understanding:${classId}:${lessonId || "default"}:${slideIndex}`;
       const understandingDataStr = await env.SLIDES.get(understandingKey);
@@ -158,12 +231,53 @@ export async function onRequestGet(context) {
   }
 }
 
+export async function onRequestDelete(context) {
+  const { request, env } = context;
+  const url = new URL(request.url);
+  const classId = url.searchParams.get("classId");
+
+  if (!classId) {
+    return new Response(
+      JSON.stringify({ error: "classId required" }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  try {
+    const understandingCheckKey = `understanding:check:${classId}`;
+    const checkDataStr = await env.SLIDES.get(understandingCheckKey);
+    
+    if (checkDataStr) {
+      const checkData = JSON.parse(checkDataStr);
+      checkData.active = false;
+      await env.SLIDES.put(understandingCheckKey, JSON.stringify(checkData), { expirationTtl: 3600 });
+    }
+
+    return new Response(
+      JSON.stringify({ ok: true }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("이해도 체크 종료 오류:", error);
+    return new Response(
+      JSON.stringify({ error: "Internal server error" }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
+}
+
 export async function onRequestOptions(context) {
   return new Response(null, {
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
       "Access-Control-Max-Age": "86400",
     },
