@@ -307,7 +307,14 @@ export async function onRequestPost(context) {
     await env.SLIDES.put(classId, value);
 
     // 연결된 모든 SSE 클라이언트에 변경사항 브로드캐스트
-    broadcastToClients(classId, { lessonId, slideIndex });
+    // 에러가 발생해도 계속 진행
+    try {
+      broadcastToClients(classId, { lessonId, slideIndex });
+      console.log(`[SSE] 슬라이드 변경 브로드캐스트: classId=${classId}, lessonId=${lessonId}, slideIndex=${slideIndex}`);
+    } catch (error) {
+      console.error(`[SSE] 브로드캐스트 오류:`, error);
+      // 브로드캐스트 실패해도 저장은 성공했으므로 계속 진행
+    }
 
     return new Response(
       JSON.stringify({ ok: true, lessonId, slideIndex }),

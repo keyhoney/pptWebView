@@ -89,7 +89,7 @@ export async function onRequestGet(context) {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type",
-          "Cache-Control": "public, max-age=3600", // 1시간 캐시
+          "Cache-Control": "no-cache, no-store, must-revalidate", // 캐시 비활성화
         },
       }
     );

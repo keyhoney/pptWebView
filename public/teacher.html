@@ -81,18 +81,80 @@
         }
         .main-content {
             margin-right: 220px;
+            margin-left: 250px;
+        }
+        .left-sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 240px;
+            height: 100vh;
+            background: white;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            overflow-y: auto;
+            padding: 20px;
+            z-index: 1000;
+        }
+        .left-sidebar .nav-link {
+            color: #333;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-bottom: 5px;
+        }
+        .left-sidebar .nav-link:hover {
+            background-color: #f0f0f0;
+        }
+        .left-sidebar .nav-link.active {
+            background-color: #0d6efd;
+            color: white;
         }
         @media (max-width: 768px) {
             .thumbnail-sidebar {
                 display: none;
             }
+            .left-sidebar {
+                display: none;
+            }
             .main-content {
                 margin-right: 0;
+                margin-left: 0;
             }
         }
     </style>
 </head>
 <body>
+    <!-- 좌측 사이드바 메뉴 -->
+    <div class="left-sidebar">
+        <h5 class="mb-3">📚 수업 도구</h5>
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link active" href="#" onclick="showQuizSection(); return false;">
+                    📝 실시간 퀴즈
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#" onclick="showUnderstandingSection(); return false;">
+                    📊 이해도 체크
+                </a>
+            </li>
+        </ul>
+        <div id="quizSection" class="mt-4">
+            <h6>퀴즈 관리</h6>
+            <button class="btn btn-primary btn-sm w-100 mb-2" onclick="showQuizModal()">퀴즈 생성</button>
+            <div id="quizResults"></div>
+        </div>
+        <div id="understandingSection" class="mt-4 d-none">
+            <h6>이해도 통계</h6>
+            <div id="understandingStats">
+                <div class="mb-2">
+                    <span class="badge bg-success w-100 d-block mb-1" id="understoodCount">이해: 0명</span>
+                    <span class="badge bg-danger w-100 d-block mb-1" id="notUnderstoodCount">이해 안 됨: 0명</span>
+                    <span class="badge bg-info w-100 d-block" id="understandingPercentage">0%</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="container-fluid slide-container main-content">
         <div class="row mb-3">
             <div class="col-12">
@@ -162,26 +224,6 @@
             </div>
         </div>
 
-        <!-- 퀴즈 및 이해도 패널 -->
-        <div class="control-panel mt-3">
-            <div class="row">
-                <div class="col-md-6">
-                    <h5>📝 실시간 퀴즈</h5>
-                    <button class="btn btn-primary btn-sm mb-2" onclick="showQuizModal()">퀴즈 생성</button>
-                    <div id="quizResults" class="mt-2"></div>
-                </div>
-                <div class="col-md-6">
-                    <h5>📊 이해도 체크</h5>
-                    <div id="understandingStats" class="mt-2">
-                        <div class="d-flex align-items-center gap-2">
-                            <span class="badge bg-success" id="understoodCount">이해: 0명</span>
-                            <span class="badge bg-danger" id="notUnderstoodCount">이해 안 됨: 0명</span>
-                            <span class="badge bg-info" id="understandingPercentage">0%</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
 
     <!-- 퀴즈 생성 모달 -->
@@ -262,11 +304,19 @@
         // API에서 모든 레슨 가져오기
         async function fetchAllLessons() {
             try {
-                const response = await fetch('/api/lessons', { cache: 'no-store' });
+                // 캐시 무시를 위해 타임스탬프 추가
+                const response = await fetch(`/api/lessons?t=${Date.now()}`, { 
+                    cache: 'no-store',
+                    headers: {
+                        'Cache-Control': 'no-cache'
+                    }
+                });
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
-                return await response.json();
+                const lessons = await response.json();
+                console.log('로드된 레슨:', Object.keys(lessons));
+                return lessons;
             } catch (error) {
                 console.error('레슨 목록 가져오기 오류:', error);
                 return {};
@@ -390,8 +440,12 @@
             currentSlideIndex = newIndex;
             renderSlide();
             
-            // API에 슬라이드 변경 전송
-            await syncStateToServer();
+            // API에 슬라이드 변경 전송 (await 필수)
+            try {
+                await syncStateToServer();
+            } catch (error) {
+                console.error('슬라이드 동기화 오류:', error);
+            }
         }
 
         // 슬라이드 번호로 직접 이동
@@ -407,7 +461,11 @@
 
             currentSlideIndex = index;
             renderSlide();
-            await syncStateToServer();
+            try {
+                await syncStateToServer();
+            } catch (error) {
+                console.error('슬라이드 동기화 오류:', error);
+            }
         }
 
         // 서버에 상태 동기화
@@ -465,7 +523,9 @@
                 thumbnailItem.onclick = () => {
                     currentSlideIndex = index;
                     renderSlide();
-                    syncStateToServer();
+                    syncStateToServer().catch(error => {
+                        console.error('썸네일 클릭 동기화 오류:', error);
+                    });
                 };
 
                 const img = document.createElement('img');
@@ -583,7 +643,9 @@
                 currentLessonId = document.getElementById('lessonSelect').value;
                 currentSlideIndex = 0; // 새 레슨의 첫 슬라이드부터 시작
                 renderSlide();
-                syncStateToServer();
+                syncStateToServer().catch(error => {
+                    console.error('레슨 변경 동기화 오류:', error);
+                });
             });
 
             // 슬라이드 번호 입력 필드 이벤트
@@ -717,10 +779,29 @@
             }
         }
 
+        // 좌측 사이드바 메뉴 전환
+        function showQuizSection() {
+            document.querySelectorAll('.left-sidebar .nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            document.querySelector('.left-sidebar .nav-link:first-child').classList.add('active');
+            document.getElementById('quizSection').classList.remove('d-none');
+            document.getElementById('understandingSection').classList.add('d-none');
+        }
+
+        function showUnderstandingSection() {
+            document.querySelectorAll('.left-sidebar .nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            document.querySelectorAll('.left-sidebar .nav-link')[1].classList.add('active');
+            document.getElementById('quizSection').classList.add('d-none');
+            document.getElementById('understandingSection').classList.remove('d-none');
+        }
+
         function displayQuizResults(data) {
             const resultsDiv = document.getElementById('quizResults');
             if (!data.results || !data.quiz) {
-                resultsDiv.innerHTML = '<p class="text-muted">퀴즈 결과가 없습니다.</p>';
+                resultsDiv.innerHTML = '<p class="text-muted small">퀴즈 결과가 없습니다.</p>';
                 return;
             }
 
@@ -728,10 +809,10 @@
             const { question, type, options } = data.quiz;
 
             let html = `
-                <div class="card">
-                    <div class="card-body">
-                        <h6>${question}</h6>
-                        <p class="small text-muted">총 ${summary.totalAnswers}명 응답</p>
+                <div class="card mb-2">
+                    <div class="card-body p-2">
+                        <h6 class="small mb-1">${question}</h6>
+                        <p class="small text-muted mb-2">총 ${summary.totalAnswers}명 응답</p>
             `;
 
             if (type === 'yesno') {
@@ -742,21 +823,21 @@
                 const noPercent = total > 0 ? Math.round((no / total) * 100) : 0;
 
                 html += `
-                    <div class="mb-2">
-                        <div class="d-flex justify-content-between mb-1">
+                    <div class="mb-1">
+                        <div class="d-flex justify-content-between mb-1 small">
                             <span>찬성</span>
                             <span>${yes}명 (${yesPercent}%)</span>
                         </div>
-                        <div class="progress" style="height: 20px;">
+                        <div class="progress" style="height: 15px;">
                             <div class="progress-bar bg-success" style="width: ${yesPercent}%"></div>
                         </div>
                     </div>
-                    <div class="mb-2">
-                        <div class="d-flex justify-content-between mb-1">
+                    <div class="mb-1">
+                        <div class="d-flex justify-content-between mb-1 small">
                             <span>반대</span>
                             <span>${no}명 (${noPercent}%)</span>
                         </div>
-                        <div class="progress" style="height: 20px;">
+                        <div class="progress" style="height: 15px;">
                             <div class="progress-bar bg-danger" style="width: ${noPercent}%"></div>
                         </div>
                     </div>
@@ -766,12 +847,12 @@
                     const count = summary.answerCounts[option] || summary.answerCounts[index] || 0;
                     const percent = summary.totalAnswers > 0 ? Math.round((count / summary.totalAnswers) * 100) : 0;
                     html += `
-                        <div class="mb-2">
-                            <div class="d-flex justify-content-between mb-1">
+                        <div class="mb-1">
+                            <div class="d-flex justify-content-between mb-1 small">
                                 <span>${option}</span>
                                 <span>${count}명 (${percent}%)</span>
                             </div>
-                            <div class="progress" style="height: 20px;">
+                            <div class="progress" style="height: 15px;">
                                 <div class="progress-bar" style="width: ${percent}%"></div>
                             </div>
                         </div>

@@ -117,16 +117,23 @@
             </div>
         </div>
 
-        <!-- 퀴즈 답변 패널 -->
-        <div class="status-bar mt-3 d-none" id="quizPanel">
-            <div class="card">
-                <div class="card-header">
-                    <h6 class="mb-0">📝 실시간 퀴즈</h6>
+    </div>
+
+    <!-- 퀴즈 모달 -->
+    <div class="modal fade" id="quizModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title">📝 실시간 퀴즈</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="card-body">
-                    <h6 id="quizQuestion"></h6>
+                <div class="modal-body">
+                    <h6 id="quizQuestion" class="mb-3"></h6>
                     <div id="quizOptions"></div>
-                    <button class="btn btn-primary btn-sm mt-2" onclick="submitQuizAnswer()">답변 제출</button>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" onclick="submitQuizAnswer()">답변 제출</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
                 </div>
             </div>
         </div>
@@ -393,6 +400,20 @@
             document.getElementById('lessonInfo').textContent = `[${currentLessonId}]`;
         }
 
+        // 상태 메시지 표시 (학생용)
+        function showStatus(message, type) {
+            // 간단한 토스트 메시지
+            const toast = document.createElement('div');
+            toast.className = `alert alert-${type} position-fixed top-0 start-50 translate-middle-x mt-3`;
+            toast.style.zIndex = '9999';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
         // 페이지 가시성 변경 시 SSE 제어 (연결 유지, 중복 방지)
         let visibilityTimeout = null;
         document.addEventListener('visibilitychange', () => {
@@ -511,7 +532,7 @@
         }
 
         function displayQuiz(quiz) {
-            const quizPanel = document.getElementById('quizPanel');
+            const quizModal = new bootstrap.Modal(document.getElementById('quizModal'));
             const quizQuestion = document.getElementById('quizQuestion');
             const quizOptions = document.getElementById('quizOptions');
             
@@ -553,7 +574,8 @@
                 selectedQuizAnswer = [];
             }
 
-            quizPanel.classList.remove('d-none');
+            // 모달 표시
+            quizModal.show();
         }
 
         function updateMultipleAnswer(index, checked) {
@@ -570,7 +592,11 @@
         }
 
         function hideQuizPanel() {
-            document.getElementById('quizPanel').classList.add('d-none');
+            const quizModalElement = document.getElementById('quizModal');
+            const quizModal = bootstrap.Modal.getInstance(quizModalElement);
+            if (quizModal) {
+                quizModal.hide();
+            }
             currentQuiz = null;
             selectedQuizAnswer = null;
         }
@@ -594,8 +620,13 @@
                 });
 
                 if (response.ok) {
-                    alert('답변이 제출되었습니다!');
-                    // 답변 제출 후에도 퀴즈는 계속 표시 (결과 확인용)
+                    // 모달 닫기
+                    const quizModalElement = document.getElementById('quizModal');
+                    const quizModal = bootstrap.Modal.getInstance(quizModalElement);
+                    if (quizModal) {
+                        quizModal.hide();
+                    }
+                    showStatus('답변이 제출되었습니다!', 'success');
                 } else {
                     alert('답변 제출에 실패했습니다.');
                 }
