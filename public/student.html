@@ -842,16 +842,28 @@
             const understandingModal = new bootstrap.Modal(understandingModalElement, {
                 backdrop: 'static',
                 keyboard: false,
-                focus: true
+                focus: false // 자동 포커스 비활성화 (수동으로 처리)
             });
             
-            // 모달이 완전히 표시된 후 포커스 설정
+            // 모달이 완전히 표시된 후 포커스 설정 (aria-hidden이 제거된 후)
             understandingModalElement.addEventListener('shown.bs.modal', function onShown() {
                 understandingModalElement.removeEventListener('shown.bs.modal', onShown);
-                // 첫 번째 버튼에 포커스 (aria-hidden 문제 방지)
-                const firstButton = understandingModalElement.querySelector('.btn-success');
-                if (firstButton) {
-                    setTimeout(() => firstButton.focus(), 100);
+                
+                // aria-hidden이 제거되었는지 확인
+                if (understandingModalElement.getAttribute('aria-hidden') === 'false' || 
+                    !understandingModalElement.hasAttribute('aria-hidden')) {
+                    // 첫 번째 버튼에 포커스
+                    const firstButton = understandingModalElement.querySelector('.btn-success');
+                    if (firstButton) {
+                        // 약간의 지연을 두어 DOM이 완전히 업데이트된 후 포커스 설정
+                        setTimeout(() => {
+                            try {
+                                firstButton.focus();
+                            } catch (e) {
+                                console.warn('[이해도 체크] 포커스 설정 실패:', e);
+                            }
+                        }, 150);
+                    }
                 }
             }, { once: true });
             
@@ -1117,16 +1129,28 @@
             const quizModal = new bootstrap.Modal(quizModalElement, {
                 backdrop: 'static',
                 keyboard: false,
-                focus: true
+                focus: false // 자동 포커스 비활성화 (수동으로 처리)
             });
             
-            // 모달이 완전히 표시된 후 포커스 설정
+            // 모달이 완전히 표시된 후 포커스 설정 (aria-hidden이 제거된 후)
             quizModalElement.addEventListener('shown.bs.modal', function onShown() {
                 quizModalElement.removeEventListener('shown.bs.modal', onShown);
-                // 첫 번째 라디오 버튼에 포커스 (aria-hidden 문제 방지)
-                const firstRadio = quizModalElement.querySelector('.form-check-input');
-                if (firstRadio) {
-                    setTimeout(() => firstRadio.focus(), 100);
+                
+                // aria-hidden이 제거되었는지 확인
+                if (quizModalElement.getAttribute('aria-hidden') === 'false' || 
+                    !quizModalElement.hasAttribute('aria-hidden')) {
+                    // 첫 번째 라디오 버튼에 포커스
+                    const firstRadio = quizModalElement.querySelector('.form-check-input');
+                    if (firstRadio) {
+                        // 약간의 지연을 두어 DOM이 완전히 업데이트된 후 포커스 설정
+                        setTimeout(() => {
+                            try {
+                                firstRadio.focus();
+                            } catch (e) {
+                                console.warn('[퀴즈] 포커스 설정 실패:', e);
+                            }
+                        }, 150);
+                    }
                 }
             }, { once: true });
             
