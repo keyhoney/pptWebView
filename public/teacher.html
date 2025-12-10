@@ -162,7 +162,6 @@
             <div class="col-12">
                 <p class="text-muted mb-0">
                     수업 ID: <span id="classIdDisplay" class="badge bg-primary status-badge">-</span>
-                    <span class="ms-3">학생 참여: <span id="studentCount" class="badge bg-success status-badge">0명</span></span>
                 </p>
             </div>
         </div>
@@ -278,7 +277,6 @@
         let currentLessonId = "lesson1";
         let classId = '';
         let preloadedImages = new Map(); // 프리로드된 이미지 캐시
-        let studentCountInterval = null; // 학생 수 조회 인터벌
         let currentQuizId = null; // 현재 활성 퀴즈 ID
         let quizResultInterval = null; // 퀴즈 결과 조회 인터벌
         let understandingInterval = null; // 이해도 통계 조회 인터벌
@@ -495,9 +493,8 @@
                     
                     // 브로드캐스트 성공 여부 표시
                     if (data.broadcastSuccess) {
-                        const msg = `슬라이드 동기화 성공 (${data.connectedStudents || 0}명 연결됨)`;
-                        showStatus(msg, 'success');
-                        console.log(`[동기화 성공] 타임스탬프: ${lastSyncTimestamp}, 학생: ${data.connectedStudents}`);
+                        showStatus('슬라이드 동기화 성공', 'success');
+                        console.log(`[동기화 성공] 타임스탬프: ${lastSyncTimestamp}`);
                     } else {
                         showStatus('서버 저장 완료 (브로드캐스트 실패, 폴링으로 동기화됨)', 'warning');
                         console.warn('[동기화 경고] 브로드캐스트 실패, 폴링 백업으로 동기화 예정');
@@ -570,18 +567,6 @@
             });
         }
 
-        // 학생 수 조회 (slide.js의 connectedClients 사용)
-        async function fetchStudentCount() {
-            try {
-                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}&students=true`, { cache: 'no-store' });
-                if (response.ok) {
-                    const data = await response.json();
-                    document.getElementById('studentCount').textContent = `${data.count}명`;
-                }
-            } catch (error) {
-                console.error('학생 수 조회 오류:', error);
-            }
-        }
 
         // 상태 메시지 표시
         function showStatus(message, type) {
@@ -709,10 +694,6 @@
 
             // 서버에서 기존 상태 불러오기
             await initFromServer();
-
-            // 학생 수 조회 시작 (5초마다)
-            fetchStudentCount();
-            studentCountInterval = setInterval(fetchStudentCount, 5000);
         }
 
         // 키보드 단축키
@@ -1035,9 +1016,6 @@
 
         // 페이지 언로드 시 정리
         window.addEventListener('beforeunload', () => {
-            if (studentCountInterval) {
-                clearInterval(studentCountInterval);
-            }
             if (quizResultInterval) {
                 clearInterval(quizResultInterval);
             }

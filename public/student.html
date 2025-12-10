@@ -423,6 +423,23 @@
                         updateSyncStatus(true);
                         return;
                     }
+                    
+                    // 퀴즈 종료 메시지 처리
+                    if (data.type === 'quizEnd' && data.quizId) {
+                        console.log('[SSE] 퀴즈 종료 메시지 수신:', data.quizId);
+                        // 종료된 퀴즈는 모달 닫기
+                        if (currentQuiz && currentQuiz.quizId === data.quizId) {
+                            hideQuizPanel();
+                            currentQuiz = null;
+                        }
+                        // 답변한 것으로 표시하여 다시 표시되지 않도록
+                        answeredQuizIds.add(data.quizId);
+                        isQuizActive = false;
+                        stopQuizPolling();
+                        sseConnected = true;
+                        updateSyncStatus(true);
+                        return;
+                    }
 
                     // 타임스탬프 확인 (더 최신 데이터만 적용)
                     if (data.timestamp && lastSyncTimestamp && data.timestamp < lastSyncTimestamp) {
@@ -629,6 +646,7 @@
                         
                         renderSlide();
                         // 퀴즈 확인 (이해도 체크는 SSE로 처리됨)
+                        // 활성 상태 확인을 위해 fetchActiveQuiz 호출
                         fetchActiveQuiz();
                     }
                 }
@@ -661,6 +679,13 @@
             
             // 초기 상태 조회 (즉시)
             fetchStateFromServer();
+            
+            // 초기 활성 퀴즈/이해도 체크 확인 (뒤늦게 들어온 학생을 위해)
+            // 종료된 항목은 표시되지 않도록 서버에서 필터링됨
+            setTimeout(() => {
+                fetchActiveQuiz();
+                fetchActiveUnderstandingCheck();
+            }, 1000); // SSE 연결 후 잠시 대기
 
             // 안정성을 위한 주기적 상태 확인 (10초마다 백업 폴링 - SSE가 주이고 폴링은 보조)
             setInterval(fetchStateFromServer, 10000);
@@ -681,7 +706,8 @@
                 return;
             }
             
-            if (checkData.active) {
+            // 활성 상태를 명확히 확인 (종료된 체크는 표시하지 않음)
+            if (checkData.active === true) {
                 // 체크 활성화
                 isUnderstandingCheckActive = true;
                 currentUnderstandingCheck = checkData;
@@ -703,8 +729,8 @@
                 // 조건부 폴링 시작 (체크 활성화 시에만 5초마다)
                 startUnderstandingCheckPolling();
             } else {
-                // 체크 비활성화
-                console.log('[SSE] 이해도 체크 비활성화');
+                // 체크 비활성화 (종료됨)
+                console.log('[SSE] 이해도 체크 비활성화/종료');
                 isUnderstandingCheckActive = false;
                 currentUnderstandingCheck = null;
                 hideUnderstandingModal();
@@ -746,7 +772,8 @@
                 const response = await fetch(`/api/understanding?classId=${encodeURIComponent(classId)}&checkActive=true`, { cache: 'no-store' });
                 if (response.ok) {
                     const data = await response.json();
-                    if (data.active && data.check) {
+                    // 활성 상태를 명확히 확인 (종료된 체크는 표시하지 않음)
+                    if (data.active === true && data.check && data.check.active === true) {
                         // 현재 슬라이드와 관련된 체크인지 확인
                         if (data.check.slideIndex === currentSlideIndex) {
                             const checkId = `${data.check.slideIndex}_${data.check.startedAt}`;
@@ -760,7 +787,8 @@
                             hideUnderstandingModal();
                         }
                     } else {
-                        // 체크가 비활성화됨
+                        // 체크가 비활성화됨 (종료됨)
+                        console.log('[이해도 체크] 비활성 체크 감지, 모달 닫기. active:', data.active, 'check.active:', data.check?.active);
                         isUnderstandingCheckActive = false;
                         hideUnderstandingModal();
                         stopUnderstandingCheckPolling();
@@ -897,7 +925,8 @@
                 return;
             }
             
-            if (quizData.active) {
+            // 활성 상태를 명확히 확인 (종료된 퀴즈는 표시하지 않음)
+            if (quizData.active === true) {
                 // 퀴즈 활성화
                 isQuizActive = true;
                 console.log('[SSE] 퀴즈 활성화:', quizData.quizId, '현재 슬라이드:', currentSlideIndex, '퀴즈 슬라이드:', quizData.slideIndex);
@@ -918,11 +947,18 @@
                 // 조건부 폴링 시작 (퀴즈 활성화 시에만 5초마다)
                 startQuizPolling();
             } else {
-                // 퀴즈 비활성화
-                console.log('[SSE] 퀴즈 비활성화:', quizData.quizId);
+                // 퀴즈 비활성화 (종료됨)
+                console.log('[SSE] 퀴즈 비활성화/종료:', quizData.quizId);
                 isQuizActive = false;
+                // 현재 표시 중인 퀴즈가 종료된 퀴즈면 모달 닫기
+                if (currentQuiz && currentQuiz.quizId === quizData.quizId) {
+                    hideQuizPanel();
+                }
                 currentQuiz = null;
-                hideQuizPanel();
+                // 답변한 것으로 표시하여 다시 표시되지 않도록
+                if (quizData.quizId) {
+                    answeredQuizIds.add(quizData.quizId);
+                }
                 
                 // 폴링 중지
                 stopQuizPolling();
@@ -991,11 +1027,18 @@
                 const response = await fetch(`/api/quiz?classId=${encodeURIComponent(classId)}&quizId=${quizId}`, { cache: 'no-store' });
                 if (response.ok) {
                     const data = await response.json();
-                    if (data.quiz && data.quiz.active) {
+                    // 활성 상태 확인 (종료된 퀴즈는 표시하지 않음)
+                    if (data.quiz && data.quiz.active === true) {
                         currentQuiz = data.quiz;
                         displayQuiz(data.quiz);
                     } else {
+                        // 종료된 퀴즈이거나 활성 상태가 아니면 모달 닫기
+                        console.log('[퀴즈] 비활성 퀴즈 감지, 모달 닫기:', quizId, 'active:', data.quiz?.active);
                         hideQuizPanel();
+                        // 답변한 것으로 표시하여 다시 표시되지 않도록
+                        if (quizId) {
+                            answeredQuizIds.add(quizId);
+                        }
                     }
                 }
             } catch (error) {

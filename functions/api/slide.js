@@ -10,16 +10,6 @@
 // 실제 운영 환경에서는 Durable Objects나 KV를 사용하는 것이 권장됩니다.
 export const connectedClients = new Map(); // Map<classId, Set<ReadableStreamDefaultController>>
 
-// 학생 수 조회 헬퍼 함수 (slide.js의 connectedClients 사용)
-export function getStudentCount(classId) {
-  const clients = connectedClients.get(classId);
-  return clients ? clients.size : 0;
-}
-
-// students.js와의 통합을 위한 함수 (동일한 Map 사용)
-export function getConnectedClients() {
-  return connectedClients;
-}
 
 // SSE 연결 관리 헬퍼 함수
 function addClient(classId, controller) {
@@ -110,26 +100,6 @@ export async function onRequestGet(context) {
       {
         status: 400,
         headers: { "Content-Type": "application/json" },
-      }
-    );
-  }
-
-  // 학생 수 조회 요청 확인
-  if (url.searchParams.get("students") === "true") {
-    // 조회 전에 끊어진 연결 정리
-    cleanupDisconnectedClients(classId);
-    const count = getStudentCount(classId);
-    console.log(`[학생 수 조회] classId=${classId}, 연결 수=${count}`);
-    return new Response(
-      JSON.stringify({ count }),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-        },
       }
     );
   }
@@ -332,13 +302,10 @@ export async function onRequestPost(context) {
     // 연결된 모든 SSE 클라이언트에 변경사항 브로드캐스트
     // 에러가 발생해도 계속 진행
     let broadcastSuccess = false;
-    let connectedCount = 0;
     try {
-      const clients = connectedClients.get(classId);
-      connectedCount = clients ? clients.size : 0;
       broadcastToClients(classId, { lessonId, slideIndex, timestamp });
       broadcastSuccess = true;
-      console.log(`[SSE] 슬라이드 변경 브로드캐스트 성공: classId=${classId}, lessonId=${lessonId}, slideIndex=${slideIndex}, 연결된 학생=${connectedCount}`);
+      console.log(`[SSE] 슬라이드 변경 브로드캐스트 성공: classId=${classId}, lessonId=${lessonId}, slideIndex=${slideIndex}`);
     } catch (error) {
       console.error(`[SSE] 브로드캐스트 오류:`, error);
       // 브로드캐스트 실패해도 저장은 성공했으므로 계속 진행
@@ -350,8 +317,7 @@ export async function onRequestPost(context) {
         lessonId, 
         slideIndex, 
         timestamp,
-        broadcastSuccess,
-        connectedStudents: connectedCount
+        broadcastSuccess
       }),
       {
         status: 200,

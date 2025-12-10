@@ -202,7 +202,8 @@ export async function onRequestGet(context) {
         const quizDataStr = await env.SLIDES.get(quizKey);
         if (quizDataStr) {
           const quizData = JSON.parse(quizDataStr);
-          if (quizData.active) {
+          // 활성 상태를 명확히 확인 (종료된 퀴즈는 제외)
+          if (quizData.active === true) {
             quizzes.push({
               quizId: qId,
               question: quizData.question,
@@ -210,8 +211,17 @@ export async function onRequestGet(context) {
               slideIndex: quizData.slideIndex,
               answerCount: Object.keys(quizData.answers || {}).length,
             });
+          } else {
+            // 비활성 퀴즈는 활성 목록에서도 제거 (정리)
+            console.log(`[퀴즈] 비활성 퀴즈 발견, 목록에서 제거: ${qId}`);
           }
         }
+      }
+      
+      // 비활성 퀴즈를 활성 목록에서 제거 (정리)
+      const activeQuizIds = quizzes.map(q => q.quizId);
+      if (activeQuizIds.length !== quizIds.length) {
+        await env.SLIDES.put(activeQuizzesKey, JSON.stringify(activeQuizIds), { expirationTtl: 3600 });
       }
 
       return new Response(
@@ -256,9 +266,9 @@ export async function onRequestDelete(context) {
       quizData.active = false;
       await env.SLIDES.put(quizKey, JSON.stringify(quizData), { expirationTtl: 3600 });
       
-      // SSE로 퀴즈 종료 브로드캐스트
+      // SSE로 퀴즈 종료 브로드캐스트 (active: false로 설정된 상태)
       try {
-        broadcastQuiz(classId, quizData);
+        broadcastQuiz(classId, { type: 'quizEnd', quizId: quizId, active: false });
       } catch (error) {
         console.error('[퀴즈] SSE 브로드캐스트 오류:', error);
       }

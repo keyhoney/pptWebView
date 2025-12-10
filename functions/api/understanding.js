@@ -166,8 +166,10 @@ export async function onRequestGet(context) {
       }
 
       const checkData = JSON.parse(checkDataStr);
+      // 활성 상태를 명확히 확인 (종료된 체크는 false 반환)
+      const isActive = checkData.active === true;
       return new Response(
-        JSON.stringify({ active: checkData.active || false, check: checkData }),
+        JSON.stringify({ active: isActive, check: checkData }),
         {
           status: 200,
           headers: {

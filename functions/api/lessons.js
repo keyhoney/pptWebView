@@ -42,15 +42,17 @@ async function findSlidesForLesson(baseUrl, lessonId, maxSlides = 100) {
       }
     }
 
-    // 이번 배치에서 슬라이드를 하나도 못 찾았다면 탐색 중단 (최적화)
+    // 이번 배치에서 슬라이드를 하나도 못 찾았다면 카운트 증가
     if (!foundInBatch) {
       emptyBatchCount++;
-      // 연속으로 2번의 배치(20개 슬라이드)가 비어있으면 중단
-      if (emptyBatchCount >= 1) {
+      // 연속으로 3번의 배치(30개 슬라이드)가 비어있으면 중단
+      // (슬라이드 번호가 연속적이지 않을 수 있으므로 여유를 둠)
+      if (emptyBatchCount >= 3) {
+        console.log(`[레슨 ${lessonId}] 연속 3개 빈 배치 감지, 슬라이드 탐색 종료 (${slides.length}개 발견)`);
         break;
       }
     } else {
-      emptyBatchCount = 0;
+      emptyBatchCount = 0; // 슬라이드를 찾았으면 카운터 리셋
     }
   }
   
