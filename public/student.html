@@ -101,6 +101,35 @@
                 <p class="mt-3 text-muted" id="loadingText">슬라이드를 불러오는 중...</p>
             </div>
         </div>
+
+        <!-- 이해도 체크 버튼 -->
+        <div class="status-bar mt-3">
+            <div class="text-center">
+                <h6 class="mb-3">이해도 체크</h6>
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-success btn-lg" id="understoodBtn" onclick="submitUnderstanding(true)">
+                        ✅ 이해했어요
+                    </button>
+                    <button type="button" class="btn btn-danger btn-lg" id="notUnderstoodBtn" onclick="submitUnderstanding(false)">
+                        ❌ 이해 안 돼요
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 퀴즈 답변 패널 -->
+        <div class="status-bar mt-3 d-none" id="quizPanel">
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="mb-0">📝 실시간 퀴즈</h6>
+                </div>
+                <div class="card-body">
+                    <h6 id="quizQuestion"></h6>
+                    <div id="quizOptions"></div>
+                    <button class="btn btn-primary btn-sm mt-2" onclick="submitQuizAnswer()">답변 제출</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -112,6 +141,9 @@
         let classId = '';
         let eventSource = null;
         let preloadedImages = new Map(); // 프리로드된 이미지 캐시
+        let studentId = null; // 학생 고유 ID
+        let currentQuiz = null; // 현재 활성 퀴즈
+        let selectedQuizAnswer = null; // 선택한 답변
 
         // URL에서 classId 읽기
         function getClassId() {
@@ -122,6 +154,16 @@
                 return false;
             }
             document.getElementById('classIdDisplay').textContent = classId;
+            
+            // 학생 ID 생성 (브라우저 세션 기반)
+            if (!studentId) {
+                studentId = sessionStorage.getItem('studentId');
+                if (!studentId) {
+                    studentId = `student_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                    sessionStorage.setItem('studentId', studentId);
+                }
+            }
+            
             return true;
         }
 
@@ -398,6 +440,178 @@
             // SSE의 초기 메시지에서 상태를 받으면 자동으로 renderSlide()가 호출됨
         }
 
+        // 이해도 체크 제출
+        async function submitUnderstanding(understood) {
+            try {
+                const response = await fetch('/api/understanding', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        classId,
+                        studentId,
+                        slideIndex: currentSlideIndex,
+                        lessonId: currentLessonId,
+                        understood,
+                    }),
+                });
+
+                if (response.ok) {
+                    // 버튼 상태 업데이트
+                    if (understood) {
+                        document.getElementById('understoodBtn').classList.add('active');
+                        document.getElementById('notUnderstoodBtn').classList.remove('active');
+                    } else {
+                        document.getElementById('notUnderstoodBtn').classList.add('active');
+                        document.getElementById('understoodBtn').classList.remove('active');
+                    }
+                }
+            } catch (error) {
+                console.error('이해도 체크 제출 오류:', error);
+            }
+        }
+
+        // 퀴즈 조회
+        async function fetchActiveQuiz() {
+            try {
+                const response = await fetch(`/api/quiz?classId=${encodeURIComponent(classId)}`, { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.quizzes && data.quizzes.length > 0) {
+                        // 현재 슬라이드와 관련된 퀴즈 찾기
+                        const relevantQuiz = data.quizzes.find(q => q.slideIndex === currentSlideIndex) || data.quizzes[0];
+                        if (relevantQuiz) {
+                            await loadQuiz(relevantQuiz.quizId);
+                        } else {
+                            hideQuizPanel();
+                        }
+                    } else {
+                        hideQuizPanel();
+                    }
+                }
+            } catch (error) {
+                console.error('퀴즈 조회 오류:', error);
+            }
+        }
+
+        async function loadQuiz(quizId) {
+            try {
+                const response = await fetch(`/api/quiz?classId=${encodeURIComponent(classId)}&quizId=${quizId}`, { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.quiz && data.quiz.active) {
+                        currentQuiz = data.quiz;
+                        displayQuiz(data.quiz);
+                    } else {
+                        hideQuizPanel();
+                    }
+                }
+            } catch (error) {
+                console.error('퀴즈 로드 오류:', error);
+            }
+        }
+
+        function displayQuiz(quiz) {
+            const quizPanel = document.getElementById('quizPanel');
+            const quizQuestion = document.getElementById('quizQuestion');
+            const quizOptions = document.getElementById('quizOptions');
+            
+            quizQuestion.textContent = quiz.question;
+            quizOptions.innerHTML = '';
+            selectedQuizAnswer = null;
+
+            if (quiz.type === 'yesno') {
+                quizOptions.innerHTML = `
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="quizAnswer" id="quizYes" value="찬성" onchange="selectedQuizAnswer = '찬성'">
+                        <label class="form-check-label" for="quizYes">찬성</label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="quizAnswer" id="quizNo" value="반대" onchange="selectedQuizAnswer = '반대'">
+                        <label class="form-check-label" for="quizNo">반대</label>
+                    </div>
+                `;
+            } else if (quiz.type === 'single') {
+                quiz.options.forEach((option, index) => {
+                    const optionDiv = document.createElement('div');
+                    optionDiv.className = 'form-check mb-2';
+                    optionDiv.innerHTML = `
+                        <input class="form-check-input" type="radio" name="quizAnswer" id="quizOption${index}" value="${index}" onchange="selectedQuizAnswer = ${index}">
+                        <label class="form-check-label" for="quizOption${index}">${option}</label>
+                    `;
+                    quizOptions.appendChild(optionDiv);
+                });
+            } else if (quiz.type === 'multiple') {
+                quiz.options.forEach((option, index) => {
+                    const optionDiv = document.createElement('div');
+                    optionDiv.className = 'form-check mb-2';
+                    optionDiv.innerHTML = `
+                        <input class="form-check-input" type="checkbox" id="quizOption${index}" value="${index}" onchange="updateMultipleAnswer(${index}, this.checked)">
+                        <label class="form-check-label" for="quizOption${index}">${option}</label>
+                    `;
+                    quizOptions.appendChild(optionDiv);
+                });
+                selectedQuizAnswer = [];
+            }
+
+            quizPanel.classList.remove('d-none');
+        }
+
+        function updateMultipleAnswer(index, checked) {
+            if (!Array.isArray(selectedQuizAnswer)) {
+                selectedQuizAnswer = [];
+            }
+            if (checked) {
+                if (!selectedQuizAnswer.includes(index)) {
+                    selectedQuizAnswer.push(index);
+                }
+            } else {
+                selectedQuizAnswer = selectedQuizAnswer.filter(i => i !== index);
+            }
+        }
+
+        function hideQuizPanel() {
+            document.getElementById('quizPanel').classList.add('d-none');
+            currentQuiz = null;
+            selectedQuizAnswer = null;
+        }
+
+        async function submitQuizAnswer() {
+            if (!currentQuiz || selectedQuizAnswer === null) {
+                alert('답변을 선택하세요.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/quiz?action=answer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        classId,
+                        quizId: currentQuiz.quizId,
+                        studentId,
+                        answer: selectedQuizAnswer,
+                    }),
+                });
+
+                if (response.ok) {
+                    alert('답변이 제출되었습니다!');
+                    // 답변 제출 후에도 퀴즈는 계속 표시 (결과 확인용)
+                } else {
+                    alert('답변 제출에 실패했습니다.');
+                }
+            } catch (error) {
+                console.error('답변 제출 오류:', error);
+                alert('답변 제출에 실패했습니다.');
+            }
+        }
+
+        // 슬라이드 변경 시 퀴즈 확인
+        const originalRenderSlide = renderSlide;
+        renderSlide = function() {
+            originalRenderSlide();
+            fetchActiveQuiz();
+        };
+
         // 페이지 언로드 시 정리
         window.addEventListener('beforeunload', () => {
             console.log('페이지 언로드, SSE 연결 종료');
@@ -406,6 +620,9 @@
 
         // 페이지 로드 시 초기화
         init();
+        
+        // 퀴즈 조회 시작 (3초마다)
+        setInterval(fetchActiveQuiz, 3000);
     </script>
 </body>
 </html>

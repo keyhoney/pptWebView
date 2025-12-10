@@ -161,6 +161,71 @@
                 </div>
             </div>
         </div>
+
+        <!-- 퀴즈 및 이해도 패널 -->
+        <div class="control-panel mt-3">
+            <div class="row">
+                <div class="col-md-6">
+                    <h5>📝 실시간 퀴즈</h5>
+                    <button class="btn btn-primary btn-sm mb-2" onclick="showQuizModal()">퀴즈 생성</button>
+                    <div id="quizResults" class="mt-2"></div>
+                </div>
+                <div class="col-md-6">
+                    <h5>📊 이해도 체크</h5>
+                    <div id="understandingStats" class="mt-2">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-success" id="understoodCount">이해: 0명</span>
+                            <span class="badge bg-danger" id="notUnderstoodCount">이해 안 됨: 0명</span>
+                            <span class="badge bg-info" id="understandingPercentage">0%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 퀴즈 생성 모달 -->
+    <div class="modal fade" id="quizModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">퀴즈 생성</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">퀴즈 유형</label>
+                        <select class="form-select" id="quizType">
+                            <option value="yesno">찬반 투표</option>
+                            <option value="single">객관식 (단일 선택)</option>
+                            <option value="multiple">객관식 (다중 선택)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">질문</label>
+                        <input type="text" class="form-control" id="quizQuestion" placeholder="질문을 입력하세요">
+                    </div>
+                    <div class="mb-3" id="quizOptionsContainer">
+                        <label class="form-label">선택지</label>
+                        <div id="quizOptionsList">
+                            <div class="input-group mb-2">
+                                <input type="text" class="form-control" placeholder="선택지 1">
+                                <button class="btn btn-outline-danger" type="button" onclick="removeQuizOption(this)">삭제</button>
+                            </div>
+                            <div class="input-group mb-2">
+                                <input type="text" class="form-control" placeholder="선택지 2">
+                                <button class="btn btn-outline-danger" type="button" onclick="removeQuizOption(this)">삭제</button>
+                            </div>
+                        </div>
+                        <button class="btn btn-sm btn-outline-primary" onclick="addQuizOption()">선택지 추가</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                    <button type="button" class="btn btn-primary" onclick="createQuiz()">퀴즈 시작</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- 썸네일 네비게이션 사이드바 -->
@@ -178,6 +243,9 @@
         let classId = '';
         let preloadedImages = new Map(); // 프리로드된 이미지 캐시
         let studentCountInterval = null; // 학생 수 조회 인터벌
+        let currentQuizId = null; // 현재 활성 퀴즈 ID
+        let quizResultInterval = null; // 퀴즈 결과 조회 인터벌
+        let understandingInterval = null; // 이해도 통계 조회 인터벌
 
         // URL에서 classId 읽기
         function getClassId() {
@@ -546,15 +614,263 @@
         // 전역에서 버튼이 쓸 수 있게 노출
         window.changeSlide = changeSlide;
 
+        // 퀴즈 관련 함수
+        function showQuizModal() {
+            const modal = new bootstrap.Modal(document.getElementById('quizModal'));
+            modal.show();
+        }
+
+        function addQuizOption() {
+            const optionsList = document.getElementById('quizOptionsList');
+            const newOption = document.createElement('div');
+            newOption.className = 'input-group mb-2';
+            newOption.innerHTML = `
+                <input type="text" class="form-control" placeholder="선택지">
+                <button class="btn btn-outline-danger" type="button" onclick="removeQuizOption(this)">삭제</button>
+            `;
+            optionsList.appendChild(newOption);
+        }
+
+        function removeQuizOption(button) {
+            button.closest('.input-group').remove();
+        }
+
+        async function createQuiz() {
+            const question = document.getElementById('quizQuestion').value;
+            const type = document.getElementById('quizType').value;
+            
+            if (!question.trim()) {
+                alert('질문을 입력하세요.');
+                return;
+            }
+
+            let options = [];
+            if (type !== 'yesno') {
+                const optionInputs = document.querySelectorAll('#quizOptionsList input');
+                options = Array.from(optionInputs).map(input => input.value.trim()).filter(v => v);
+                
+                if (options.length < 2) {
+                    alert('최소 2개의 선택지를 입력하세요.');
+                    return;
+                }
+            } else {
+                options = ['찬성', '반대'];
+            }
+
+            const quizId = `quiz_${Date.now()}`;
+
+            try {
+                const response = await fetch('/api/quiz?action=create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        classId,
+                        quizId,
+                        question,
+                        options,
+                        type,
+                        slideIndex: currentSlideIndex,
+                    }),
+                });
+
+                if (response.ok) {
+                    currentQuizId = quizId;
+                    showStatus('퀴즈가 시작되었습니다!', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('quizModal')).hide();
+                    
+                    // 모달 초기화
+                    document.getElementById('quizQuestion').value = '';
+                    document.getElementById('quizType').value = 'yesno';
+                    document.getElementById('quizOptionsList').innerHTML = `
+                        <div class="input-group mb-2">
+                            <input type="text" class="form-control" placeholder="선택지 1">
+                            <button class="btn btn-outline-danger" type="button" onclick="removeQuizOption(this)">삭제</button>
+                        </div>
+                        <div class="input-group mb-2">
+                            <input type="text" class="form-control" placeholder="선택지 2">
+                            <button class="btn btn-outline-danger" type="button" onclick="removeQuizOption(this)">삭제</button>
+                        </div>
+                    `;
+                    
+                    // 퀴즈 결과 조회 시작
+                    startQuizResultPolling();
+                } else {
+                    showStatus('퀴즈 생성에 실패했습니다.', 'danger');
+                }
+            } catch (error) {
+                console.error('퀴즈 생성 오류:', error);
+                showStatus('퀴즈 생성에 실패했습니다.', 'danger');
+            }
+        }
+
+        async function fetchQuizResults() {
+            if (!currentQuizId) return;
+
+            try {
+                const response = await fetch(`/api/quiz?classId=${encodeURIComponent(classId)}&quizId=${currentQuizId}`, { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    displayQuizResults(data);
+                }
+            } catch (error) {
+                console.error('퀴즈 결과 조회 오류:', error);
+            }
+        }
+
+        function displayQuizResults(data) {
+            const resultsDiv = document.getElementById('quizResults');
+            if (!data.results || !data.quiz) {
+                resultsDiv.innerHTML = '<p class="text-muted">퀴즈 결과가 없습니다.</p>';
+                return;
+            }
+
+            const { summary } = data.results;
+            const { question, type, options } = data.quiz;
+
+            let html = `
+                <div class="card">
+                    <div class="card-body">
+                        <h6>${question}</h6>
+                        <p class="small text-muted">총 ${summary.totalAnswers}명 응답</p>
+            `;
+
+            if (type === 'yesno') {
+                const yes = summary.answerCounts['찬성'] || 0;
+                const no = summary.answerCounts['반대'] || 0;
+                const total = yes + no;
+                const yesPercent = total > 0 ? Math.round((yes / total) * 100) : 0;
+                const noPercent = total > 0 ? Math.round((no / total) * 100) : 0;
+
+                html += `
+                    <div class="mb-2">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span>찬성</span>
+                            <span>${yes}명 (${yesPercent}%)</span>
+                        </div>
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar bg-success" style="width: ${yesPercent}%"></div>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span>반대</span>
+                            <span>${no}명 (${noPercent}%)</span>
+                        </div>
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar bg-danger" style="width: ${noPercent}%"></div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                options.forEach((option, index) => {
+                    const count = summary.answerCounts[option] || summary.answerCounts[index] || 0;
+                    const percent = summary.totalAnswers > 0 ? Math.round((count / summary.totalAnswers) * 100) : 0;
+                    html += `
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span>${option}</span>
+                                <span>${count}명 (${percent}%)</span>
+                            </div>
+                            <div class="progress" style="height: 20px;">
+                                <div class="progress-bar" style="width: ${percent}%"></div>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+
+            html += `
+                        <button class="btn btn-sm btn-danger mt-2" onclick="endQuiz()">퀴즈 종료</button>
+                    </div>
+                </div>
+            `;
+
+            resultsDiv.innerHTML = html;
+        }
+
+        async function endQuiz() {
+            if (!currentQuizId) return;
+
+            try {
+                const response = await fetch(`/api/quiz?classId=${encodeURIComponent(classId)}&quizId=${currentQuizId}`, {
+                    method: 'DELETE',
+                });
+
+                if (response.ok) {
+                    currentQuizId = null;
+                    document.getElementById('quizResults').innerHTML = '';
+                    if (quizResultInterval) {
+                        clearInterval(quizResultInterval);
+                        quizResultInterval = null;
+                    }
+                    showStatus('퀴즈가 종료되었습니다.', 'success');
+                }
+            } catch (error) {
+                console.error('퀴즈 종료 오류:', error);
+            }
+        }
+
+        function startQuizResultPolling() {
+            if (quizResultInterval) {
+                clearInterval(quizResultInterval);
+            }
+            fetchQuizResults(); // 즉시 한 번 조회
+            quizResultInterval = setInterval(fetchQuizResults, 2000); // 2초마다 조회
+        }
+
+        // 이해도 통계 조회
+        async function fetchUnderstandingStats() {
+            try {
+                const response = await fetch(
+                    `/api/understanding?classId=${encodeURIComponent(classId)}&lessonId=${encodeURIComponent(currentLessonId)}&slideIndex=${currentSlideIndex}`,
+                    { cache: 'no-store' }
+                );
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('understoodCount').textContent = `이해: ${data.understood}명`;
+                    document.getElementById('notUnderstoodCount').textContent = `이해 안 됨: ${data.notUnderstood}명`;
+                    document.getElementById('understandingPercentage').textContent = `${data.percentage}%`;
+                }
+            } catch (error) {
+                console.error('이해도 통계 조회 오류:', error);
+            }
+        }
+
+        function startUnderstandingPolling() {
+            if (understandingInterval) {
+                clearInterval(understandingInterval);
+            }
+            fetchUnderstandingStats(); // 즉시 한 번 조회
+            understandingInterval = setInterval(fetchUnderstandingStats, 3000); // 3초마다 조회
+        }
+
+        // 슬라이드 변경 시 이해도 통계 업데이트를 위해 renderSlide 함수 수정
+        const originalRenderSlideFunc = renderSlide;
+        renderSlide = function() {
+            originalRenderSlideFunc();
+            fetchUnderstandingStats();
+        };
+
         // 페이지 언로드 시 정리
         window.addEventListener('beforeunload', () => {
             if (studentCountInterval) {
                 clearInterval(studentCountInterval);
             }
+            if (quizResultInterval) {
+                clearInterval(quizResultInterval);
+            }
+            if (understandingInterval) {
+                clearInterval(understandingInterval);
+            }
         });
 
         // 페이지 로드 시 초기화
         init();
+        
+        // 이해도 통계 조회 시작
+        setTimeout(() => {
+            startUnderstandingPolling();
+        }, 1000);
     </script>
 </body>
 </html>
