@@ -463,8 +463,12 @@
             }
         }
 
-        // 서버에 상태 동기화
-        async function syncStateToServer() {
+        let lastSyncTimestamp = null; // 마지막 동기화 타임스탬프
+
+        // 서버에 상태 동기화 (재시도 로직 포함)
+        async function syncStateToServer(retryCount = 0) {
+            const maxRetries = 3;
+            
             try {
                 const response = await fetch('/api/slide', {
                     method: 'POST',
@@ -475,20 +479,48 @@
                         classId: classId,
                         lessonId: currentLessonId,
                         slideIndex: currentSlideIndex
-                    })
+                    }),
+                    // 타임아웃 설정 (5초)
+                    signal: AbortSignal.timeout(5000)
                 });
 
                 if (!response.ok) {
-                    throw new Error('서버 업데이트 실패');
+                    throw new Error(`서버 응답 오류: ${response.status}`);
                 }
 
                 const data = await response.json();
+                
                 if (data.ok) {
-                    showStatus('슬라이드가 학생들에게 동기화되었습니다.', 'success');
+                    lastSyncTimestamp = data.timestamp || Date.now();
+                    
+                    // 브로드캐스트 성공 여부 표시
+                    if (data.broadcastSuccess) {
+                        const msg = `슬라이드 동기화 성공 (${data.connectedStudents || 0}명 연결됨)`;
+                        showStatus(msg, 'success');
+                        console.log(`[동기화 성공] 타임스탬프: ${lastSyncTimestamp}, 학생: ${data.connectedStudents}`);
+                    } else {
+                        showStatus('서버 저장 완료 (브로드캐스트 실패, 폴링으로 동기화됨)', 'warning');
+                        console.warn('[동기화 경고] 브로드캐스트 실패, 폴링 백업으로 동기화 예정');
+                    }
+                    
+                    return true;
+                } else {
+                    throw new Error('서버 응답 오류');
                 }
             } catch (error) {
-                console.error('상태 동기화 오류:', error);
-                showStatus('슬라이드 동기화에 실패했습니다. 다시 시도해주세요.', 'danger');
+                console.error(`[동기화 오류 ${retryCount + 1}/${maxRetries}]`, error);
+                
+                // 재시도 로직
+                if (retryCount < maxRetries) {
+                    const delay = Math.min(1000 * Math.pow(2, retryCount), 3000); // 지수 백오프 (최대 3초)
+                    showStatus(`동기화 재시도 중... (${retryCount + 1}/${maxRetries})`, 'warning');
+                    
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return await syncStateToServer(retryCount + 1);
+                } else {
+                    showStatus('슬라이드 동기화에 실패했습니다. 학생들이 폴링으로 동기화됩니다.', 'danger');
+                    return false;
+                }
             }
         }
 

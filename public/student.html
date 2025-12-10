@@ -67,7 +67,10 @@
                         <span class="sync-indicator" id="syncIndicator"></span>
                         <span id="syncStatus">연결 중...</span>
                     </h5>
-                    <small class="text-muted">수업 ID: <span id="classIdDisplay">-</span></small>
+                    <small class="text-muted">
+                        수업 ID: <span id="classIdDisplay">-</span> | 
+                        마지막 동기화: <span id="lastSyncTime">-</span>
+                    </small>
                 </div>
                 <div class="col-md-6 text-md-end">
                     <span class="badge bg-info fs-6 px-3 py-2">
@@ -158,10 +161,20 @@
         let classId = '';
         let eventSource = null;
         let preloadedImages = new Map(); // 프리로드된 이미지 캐시
+        let currentLessonCache = null; // 현재 캐시된 레슨 ID
+        const MAX_CACHE_SIZE = 50; // 최대 캐시 크기 (LRU 정책)
         let studentId = null; // 학생 고유 ID
         let currentQuiz = null; // 현재 활성 퀴즈
         let selectedQuizAnswer = null; // 선택한 답변
         let answeredQuizIds = new Set(); // 이미 답변한 퀴즈 ID 목록
+        let currentUnderstandingCheck = null; // 현재 활성 이해도 체크
+        let answeredUnderstandingChecks = new Set(); // 이미 답변한 이해도 체크 ID 목록
+        let lastSyncTimestamp = null; // 마지막 동기화 타임스탬프
+        let sseConnected = false; // SSE 연결 상태
+        let sseReconnectAttempts = 0; // 재연결 시도 횟수
+        let sseReconnectTimeout = null; // 재연결 타이머
+        let lastHeartbeatTime = Date.now(); // 마지막 heartbeat 수신 시간
+        let heartbeatCheckInterval = null; // heartbeat 체크 인터벌
 
         // URL에서 classId 읽기
         function getClassId() {
@@ -204,15 +217,47 @@
             return LESSONS[currentLessonId] || [];
         }
 
-        // 이미지 프리로딩
+        // 이미지 프리로딩 (LRU 캐시 관리 포함)
         function preloadSlide(slideUrl) {
             if (preloadedImages.has(slideUrl)) {
-                return; // 이미 프리로드됨
+                // LRU: 사용된 이미지를 맵의 끝으로 이동
+                const img = preloadedImages.get(slideUrl);
+                preloadedImages.delete(slideUrl);
+                preloadedImages.set(slideUrl, img);
+                return;
+            }
+
+            // 캐시 크기 제한 (LRU: 가장 오래된 항목 제거)
+            if (preloadedImages.size >= MAX_CACHE_SIZE) {
+                const firstKey = preloadedImages.keys().next().value;
+                preloadedImages.delete(firstKey);
+                console.log('[캐시] 오래된 이미지 제거:', firstKey);
             }
 
             const img = new Image();
             img.src = slideUrl;
             preloadedImages.set(slideUrl, img);
+        }
+
+        // 레슨 변경 시 이전 레슨의 이미지 캐시 정리
+        function clearPreviousLessonCache(newLessonId) {
+            if (currentLessonCache && currentLessonCache !== newLessonId) {
+                console.log('[캐시] 레슨 변경 감지, 이전 레슨 캐시 정리:', currentLessonCache);
+                
+                // 현재 레슨의 슬라이드 URL만 유지하고 나머지 제거
+                const currentSlides = LESSONS[newLessonId] || [];
+                const currentSlideSet = new Set(currentSlides);
+                
+                // 현재 레슨에 속하지 않은 이미지 제거
+                for (const [url, img] of preloadedImages.entries()) {
+                    if (!currentSlideSet.has(url)) {
+                        preloadedImages.delete(url);
+                    }
+                }
+                
+                console.log(`[캐시] 정리 후 캐시 크기: ${preloadedImages.size}`);
+            }
+            currentLessonCache = newLessonId;
         }
 
         // 슬라이드 이미지 로드
@@ -325,13 +370,35 @@
             eventSource = new EventSource(sseUrl);
 
             eventSource.onopen = () => {
-                console.log('SSE 연결 성공');
+                console.log('[SSE] 연결 성공');
+                sseConnected = true;
+                sseReconnectAttempts = 0; // 재연결 성공 시 카운터 리셋
+                lastHeartbeatTime = Date.now();
                 updateSyncStatus(true);
+                
+                // Heartbeat 모니터링 시작 (서버에서 15초마다 보내므로 20초 이상 없으면 문제)
+                if (heartbeatCheckInterval) {
+                    clearInterval(heartbeatCheckInterval);
+                }
+                heartbeatCheckInterval = setInterval(() => {
+                    const timeSinceLastHeartbeat = Date.now() - lastHeartbeatTime;
+                    if (timeSinceLastHeartbeat > 20000) {
+                        console.warn('[SSE] Heartbeat 누락 감지, 재연결 시도');
+                        sseConnected = false;
+                        if (eventSource) {
+                            eventSource.close();
+                            eventSource = null;
+                        }
+                        connectSSE();
+                    }
+                }, 20000);
             };
             
-            // heartbeat 메시지 무시
+            // heartbeat 메시지 처리
             eventSource.addEventListener('heartbeat', () => {
-                // heartbeat는 무시 (연결 유지용)
+                lastHeartbeatTime = Date.now();
+                sseConnected = true;
+                updateSyncStatus(true);
             });
 
             eventSource.onmessage = (event) => {
@@ -339,8 +406,31 @@
                     const data = JSON.parse(event.data);
                     let changed = false;
 
+                    // 이해도 체크 메시지 처리
+                    if (data.type === 'understandingCheck' && data.check) {
+                        handleUnderstandingCheckFromSSE(data.check);
+                        sseConnected = true;
+                        updateSyncStatus(true);
+                        return;
+                    }
+
+                    // 퀴즈 메시지 처리
+                    if (data.type === 'quiz' && data.quiz) {
+                        handleQuizFromSSE(data.quiz);
+                        sseConnected = true;
+                        updateSyncStatus(true);
+                        return;
+                    }
+
+                    // 타임스탬프 확인 (더 최신 데이터만 적용)
+                    if (data.timestamp && lastSyncTimestamp && data.timestamp < lastSyncTimestamp) {
+                        console.log('[동기화 스킵] 오래된 데이터:', data.timestamp, '현재:', lastSyncTimestamp);
+                        return;
+                    }
+
                     // 레슨이 변경되었는지 확인
                     if (data.lessonId && data.lessonId !== currentLessonId) {
+                        clearPreviousLessonCache(data.lessonId);
                         currentLessonId = data.lessonId;
                         changed = true;
                     }
@@ -351,11 +441,18 @@
                         changed = true;
                     }
 
+                    // 타임스탬프 업데이트
+                    if (data.timestamp) {
+                        lastSyncTimestamp = data.timestamp;
+                    }
+
                     // 변경사항이 있으면 렌더링
                     if (changed) {
+                        console.log('[SSE 동기화] 레슨:', currentLessonId, '슬라이드:', currentSlideIndex, '타임스탬프:', lastSyncTimestamp);
                         renderSlide();
                     }
 
+                    sseConnected = true;
                     updateSyncStatus(true);
                 } catch (error) {
                     console.error('SSE 메시지 파싱 오류:', error);
@@ -363,21 +460,41 @@
             };
 
             eventSource.onerror = (error) => {
-                console.error('SSE 연결 오류:', error, 'readyState:', eventSource?.readyState);
+                console.error('[SSE] 연결 오류:', error, 'readyState:', eventSource?.readyState);
+                sseConnected = false;
                 updateSyncStatus(false);
+                
+                // Heartbeat 체크 중지
+                if (heartbeatCheckInterval) {
+                    clearInterval(heartbeatCheckInterval);
+                    heartbeatCheckInterval = null;
+                }
                 
                 // 연결이 완전히 끊어진 경우에만 재연결
                 if (eventSource && eventSource.readyState === EventSource.CLOSED) {
-                    console.log('SSE 연결이 끊어짐, 재연결 시도...');
+                    console.log('[SSE] 연결 끊김 감지, 재연결 시도');
                     eventSource.close();
                     eventSource = null;
                     
-                    // 자동 재연결 (1초 후 - 더 빠르게)
-                    setTimeout(() => {
-                        if (!eventSource) {
+                    // 지수 백오프 재연결 (최대 10초)
+                    sseReconnectAttempts++;
+                    const delay = Math.min(500 * Math.pow(2, sseReconnectAttempts - 1), 10000);
+                    
+                    console.log(`[SSE] 재연결 시도 ${sseReconnectAttempts}회, ${delay}ms 후 재시도`);
+                    
+                    if (sseReconnectTimeout) {
+                        clearTimeout(sseReconnectTimeout);
+                    }
+                    
+                    sseReconnectTimeout = setTimeout(() => {
+                        if (!eventSource && sseReconnectAttempts < 10) {
+                            console.log('[SSE] 재연결 실행');
                             connectSSE();
+                        } else if (sseReconnectAttempts >= 10) {
+                            console.error('[SSE] 재연결 실패 (최대 시도 횟수 초과), 폴링에 의존');
+                            updateSyncStatus(false);
                         }
-                    }, 1000);
+                    }, delay);
                 }
             };
         }
@@ -385,20 +502,36 @@
         // SSE 연결 종료
         function disconnectSSE() {
             if (eventSource) {
-                console.log('SSE 연결 명시적 종료');
+                console.log('[SSE] 연결 명시적 종료');
                 eventSource.close();
                 eventSource = null;
             }
+            if (heartbeatCheckInterval) {
+                clearInterval(heartbeatCheckInterval);
+                heartbeatCheckInterval = null;
+            }
+            if (sseReconnectTimeout) {
+                clearTimeout(sseReconnectTimeout);
+                sseReconnectTimeout = null;
+            }
+            sseConnected = false;
+            sseReconnectAttempts = 0;
         }
 
         // 동기화 상태 업데이트
         function updateSyncStatus(isConnected) {
             const indicator = document.getElementById('syncIndicator');
             const statusText = document.getElementById('syncStatus');
+            const lastSyncTimeEl = document.getElementById('lastSyncTime');
             
             if (isConnected) {
                 indicator.className = 'sync-indicator active';
                 statusText.textContent = '동기화 중';
+                
+                // 마지막 동기화 시간 업데이트
+                const now = new Date();
+                const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+                lastSyncTimeEl.textContent = timeStr;
             } else {
                 indicator.className = 'sync-indicator inactive';
                 statusText.textContent = '연결 끊김';
@@ -425,7 +558,7 @@
             }, 3000);
         }
 
-        // 페이지 가시성 변경 시 SSE 제어 (연결 유지, 중복 방지)
+        // 페이지 가시성 변경 시 SSE 제어 및 즉시 동기화
         let visibilityTimeout = null;
         document.addEventListener('visibilitychange', () => {
             // 디바운싱: 빠른 탭 전환 시 중복 연결 방지
@@ -436,25 +569,46 @@
             visibilityTimeout = setTimeout(() => {
                 if (document.hidden) {
                     // 탭이 숨겨지면 연결 유지 (서버 측 타임아웃으로 정리됨)
-                    // disconnectSSE(); // 주석 처리: 연결 유지
+                    console.log('[가시성] 탭 숨김, SSE 연결 유지');
                 } else {
-                    // 탭이 다시 보이면 연결 확인 (이미 연결되어 있으면 재연결 안 함)
+                    // 탭이 다시 보이면 즉시 동기화 + SSE 연결 확인
+                    console.log('[가시성] 탭 활성화, 즉시 동기화 실행');
+                    
+                    // 즉시 서버 상태 확인 (탭 전환 중 놓친 업데이트 복구)
+                    fetchStateFromServer();
+                    
+                    // SSE 연결 상태 확인
                     if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+                        console.log('[가시성] SSE 재연결 필요');
+                        connectSSE();
+                    } else if (!sseConnected) {
+                        // 연결은 있지만 응답이 없는 경우 재연결
+                        console.log('[가시성] SSE 연결 불안정, 재연결');
                         connectSSE();
                     }
                 }
-            }, 1000);
+            }, 300); // 300ms로 단축 (더 빠른 반응)
         });
 
         // 서버에서 최신 상태 조회 (SSE 보조용 폴링)
         async function fetchStateFromServer() {
             try {
-                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}`, { cache: 'no-store' });
+                const response = await fetch(`/api/slide?classId=${encodeURIComponent(classId)}`, { 
+                    cache: 'no-store',
+                    signal: AbortSignal.timeout(3000) // 3초 타임아웃
+                });
+                
                 if (response.ok) {
                     const data = await response.json();
                     let changed = false;
 
+                    // 타임스탬프 확인 (더 최신 데이터만 적용)
+                    if (data.timestamp && lastSyncTimestamp && data.timestamp <= lastSyncTimestamp) {
+                        return; // 이미 최신 상태
+                    }
+
                     if (data.lessonId && data.lessonId !== currentLessonId) {
+                        clearPreviousLessonCache(data.lessonId);
                         currentLessonId = data.lessonId;
                         changed = true;
                     }
@@ -464,15 +618,20 @@
                     }
 
                     if (changed) {
-                        console.log('서버 상태 동기화(폴링)로 변경 감지');
+                        console.log('[폴링 동기화] 변경 감지 - 레슨:', currentLessonId, '슬라이드:', currentSlideIndex, '타임스탬프:', data.timestamp);
+                        
+                        // 타임스탬프 업데이트
+                        if (data.timestamp) {
+                            lastSyncTimestamp = data.timestamp;
+                        }
+                        
                         renderSlide();
-                        // 퀴즈와 이해도 체크도 확인
+                        // 퀴즈 확인 (이해도 체크는 SSE로 처리됨)
                         fetchActiveQuiz();
-                        fetchActiveUnderstandingCheck();
                     }
                 }
             } catch (error) {
-                console.error('서버 상태 조회 오류:', error);
+                console.error('[폴링] 서버 상태 조회 오류:', error);
             }
         }
 
@@ -501,14 +660,73 @@
             // 초기 상태 조회 (즉시)
             fetchStateFromServer();
 
-            // 안정성을 위한 주기적 상태 확인 (3초마다 백업 폴링)
-            setInterval(fetchStateFromServer, 3000);
+            // 안정성을 위한 주기적 상태 확인 (10초마다 백업 폴링 - SSE가 주이고 폴링은 보조)
+            setInterval(fetchStateFromServer, 10000);
             
             // 초기 슬라이드 렌더링 (SSE에서 상태를 받을 때까지 대기)
             // SSE의 초기 메시지에서 상태를 받으면 자동으로 renderSlide()가 호출됨
         }
 
-        // 활성 이해도 체크 조회
+        let understandingCheckPollingInterval = null; // 이해도 체크 폴링 인터벌
+        let isUnderstandingCheckActive = false; // 이해도 체크 활성 상태
+
+        // SSE로 받은 이해도 체크 처리
+        function handleUnderstandingCheckFromSSE(checkData) {
+            console.log('[SSE] 이해도 체크 수신:', checkData);
+            
+            if (checkData.active) {
+                // 체크 활성화
+                isUnderstandingCheckActive = true;
+                currentUnderstandingCheck = checkData;
+                
+                // 현재 슬라이드와 관련된 체크인지 확인
+                if (checkData.slideIndex === currentSlideIndex) {
+                    const checkId = `${checkData.slideIndex}_${checkData.startedAt}`;
+                    if (!answeredUnderstandingChecks.has(checkId)) {
+                        showUnderstandingModal();
+                    }
+                }
+                
+                // 조건부 폴링 시작 (체크 활성화 시에만 5초마다)
+                startUnderstandingCheckPolling();
+            } else {
+                // 체크 비활성화
+                isUnderstandingCheckActive = false;
+                currentUnderstandingCheck = null;
+                hideUnderstandingModal();
+                
+                // 폴링 중지
+                stopUnderstandingCheckPolling();
+            }
+        }
+
+        // 조건부 폴링 시작 (체크 활성화 시에만)
+        function startUnderstandingCheckPolling() {
+            // 이미 폴링 중이면 중지 후 재시작
+            stopUnderstandingCheckPolling();
+            
+            // 5초마다 폴링
+            understandingCheckPollingInterval = setInterval(() => {
+                if (isUnderstandingCheckActive) {
+                    fetchActiveUnderstandingCheck();
+                } else {
+                    stopUnderstandingCheckPolling();
+                }
+            }, 5000);
+            
+            console.log('[이해도 체크] 조건부 폴링 시작 (5초 주기)');
+        }
+
+        // 폴링 중지
+        function stopUnderstandingCheckPolling() {
+            if (understandingCheckPollingInterval) {
+                clearInterval(understandingCheckPollingInterval);
+                understandingCheckPollingInterval = null;
+                console.log('[이해도 체크] 폴링 중지');
+            }
+        }
+
+        // 활성 이해도 체크 조회 (조건부 폴링용)
         async function fetchActiveUnderstandingCheck() {
             try {
                 const response = await fetch(`/api/understanding?classId=${encodeURIComponent(classId)}&checkActive=true`, { cache: 'no-store' });
@@ -528,7 +746,10 @@
                             hideUnderstandingModal();
                         }
                     } else {
+                        // 체크가 비활성화됨
+                        isUnderstandingCheckActive = false;
                         hideUnderstandingModal();
+                        stopUnderstandingCheckPolling();
                     }
                 }
             } catch (error) {
@@ -613,7 +834,65 @@
             }
         }
 
-        // 퀴즈 조회
+        let quizPollingInterval = null; // 퀴즈 폴링 인터벌
+        let isQuizActive = false; // 퀴즈 활성 상태
+
+        // SSE로 받은 퀴즈 처리
+        function handleQuizFromSSE(quizData) {
+            console.log('[SSE] 퀴즈 수신:', quizData);
+            
+            if (quizData.active) {
+                // 퀴즈 활성화
+                isQuizActive = true;
+                
+                // 현재 슬라이드와 관련된 퀴즈인지 확인
+                if (quizData.slideIndex === currentSlideIndex || quizData.slideIndex === null) {
+                    if (!answeredQuizIds.has(quizData.quizId)) {
+                        currentQuiz = quizData;
+                        displayQuiz(quizData);
+                    }
+                }
+                
+                // 조건부 폴링 시작 (퀴즈 활성화 시에만 5초마다)
+                startQuizPolling();
+            } else {
+                // 퀴즈 비활성화
+                isQuizActive = false;
+                currentQuiz = null;
+                hideQuizPanel();
+                
+                // 폴링 중지
+                stopQuizPolling();
+            }
+        }
+
+        // 조건부 폴링 시작 (퀴즈 활성화 시에만)
+        function startQuizPolling() {
+            // 이미 폴링 중이면 중지 후 재시작
+            stopQuizPolling();
+            
+            // 5초마다 폴링
+            quizPollingInterval = setInterval(() => {
+                if (isQuizActive) {
+                    fetchActiveQuiz();
+                } else {
+                    stopQuizPolling();
+                }
+            }, 5000);
+            
+            console.log('[퀴즈] 조건부 폴링 시작 (5초 주기)');
+        }
+
+        // 폴링 중지
+        function stopQuizPolling() {
+            if (quizPollingInterval) {
+                clearInterval(quizPollingInterval);
+                quizPollingInterval = null;
+                console.log('[퀴즈] 폴링 중지');
+            }
+        }
+
+        // 퀴즈 조회 (조건부 폴링용)
         async function fetchActiveQuiz() {
             try {
                 const response = await fetch(`/api/quiz?classId=${encodeURIComponent(classId)}`, { cache: 'no-store' });
@@ -789,28 +1068,25 @@
             }
         }
 
-        // 슬라이드 변경 시 퀴즈 및 이해도 체크 확인
+        // 슬라이드 변경 시 (퀴즈와 이해도 체크는 SSE로 처리됨)
         const originalRenderSlide = renderSlide;
         renderSlide = function() {
             originalRenderSlide();
-            fetchActiveQuiz();
-            fetchActiveUnderstandingCheck();
+            // SSE로 처리되므로 폴링은 필요 없음
         };
 
         // 페이지 언로드 시 정리
         window.addEventListener('beforeunload', () => {
             console.log('페이지 언로드, SSE 연결 종료');
             disconnectSSE();
+            stopUnderstandingCheckPolling();
         });
 
         // 페이지 로드 시 초기화
         init();
         
-        // 퀴즈 조회 시작 (1.5초마다)
-        setInterval(fetchActiveQuiz, 1500);
-        
-        // 이해도 체크 조회 시작 (1.5초마다)
-        setInterval(fetchActiveUnderstandingCheck, 1500);
+        // 퀴즈와 이해도 체크는 SSE로 주로 처리되고, 조건부 폴링은 활성화 시에만 5초마다 실행됨
+        // (startQuizPolling, startUnderstandingCheckPolling 함수에서 자동 시작)
     </script>
 </body>
 </html>

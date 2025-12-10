@@ -5,6 +5,8 @@
  * DELETE: 이해도 체크 종료
  */
 
+import { broadcastUnderstandingCheck } from './slide.js';
+
 export async function onRequestPost(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -38,6 +40,13 @@ export async function onRequestPost(context) {
         JSON.stringify(checkData),
         { expirationTtl: 3600 } // 1시간 후 자동 삭제
       );
+
+      // SSE로 이해도 체크 시작 브로드캐스트
+      try {
+        broadcastUnderstandingCheck(classId, checkData);
+      } catch (error) {
+        console.error('[이해도 체크] SSE 브로드캐스트 오류:', error);
+      }
 
       return new Response(
         JSON.stringify({ ok: true, check: checkData }),
@@ -251,6 +260,13 @@ export async function onRequestDelete(context) {
       const checkData = JSON.parse(checkDataStr);
       checkData.active = false;
       await env.SLIDES.put(understandingCheckKey, JSON.stringify(checkData), { expirationTtl: 3600 });
+      
+      // SSE로 이해도 체크 종료 브로드캐스트
+      try {
+        broadcastUnderstandingCheck(classId, checkData);
+      } catch (error) {
+        console.error('[이해도 체크] SSE 브로드캐스트 오류:', error);
+      }
     }
 
     return new Response(

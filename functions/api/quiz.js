@@ -6,6 +6,8 @@
  * DELETE: 퀴즈 종료
  */
 
+import { broadcastQuiz } from './slide.js';
+
 export async function onRequestPost(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -50,6 +52,13 @@ export async function onRequestPost(context) {
       if (!quizzes.includes(quizId)) {
         quizzes.push(quizId);
         await env.SLIDES.put(activeQuizzesKey, JSON.stringify(quizzes), { expirationTtl: 3600 });
+      }
+
+      // SSE로 퀴즈 시작 브로드캐스트
+      try {
+        broadcastQuiz(classId, quizData);
+      } catch (error) {
+        console.error('[퀴즈] SSE 브로드캐스트 오류:', error);
       }
 
       return new Response(
@@ -246,6 +255,13 @@ export async function onRequestDelete(context) {
       const quizData = JSON.parse(quizDataStr);
       quizData.active = false;
       await env.SLIDES.put(quizKey, JSON.stringify(quizData), { expirationTtl: 3600 });
+      
+      // SSE로 퀴즈 종료 브로드캐스트
+      try {
+        broadcastQuiz(classId, quizData);
+      } catch (error) {
+        console.error('[퀴즈] SSE 브로드캐스트 오류:', error);
+      }
     }
 
     // 활성 퀴즈 목록에서 제거

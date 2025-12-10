@@ -80,6 +80,24 @@ function broadcastToClients(classId, data) {
   }
 }
 
+// 이해도 체크 브로드캐스트 함수 (외부에서 호출 가능)
+export function broadcastUnderstandingCheck(classId, checkData) {
+  broadcastToClients(classId, { 
+    type: 'understandingCheck', 
+    check: checkData 
+  });
+  console.log(`[SSE] 이해도 체크 브로드캐스트: classId=${classId}, active=${checkData?.active || false}`);
+}
+
+// 퀴즈 브로드캐스트 함수 (외부에서 호출 가능)
+export function broadcastQuiz(classId, quizData) {
+  broadcastToClients(classId, { 
+    type: 'quiz', 
+    quiz: quizData 
+  });
+  console.log(`[SSE] 퀴즈 브로드캐스트: classId=${classId}, quizId=${quizData?.quizId || 'N/A'}`);
+}
+
 export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -133,19 +151,21 @@ export async function onRequestGet(context) {
             const stored = await env.SLIDES.get(classId);
             let lessonId = "lesson1";
             let slideIndex = 0;
+            let timestamp = Date.now();
 
             if (stored) {
               try {
                 const parsed = JSON.parse(stored);
                 if (parsed.lessonId) lessonId = parsed.lessonId;
                 if (typeof parsed.slideIndex === "number") slideIndex = parsed.slideIndex;
+                if (parsed.timestamp) timestamp = parsed.timestamp;
               } catch {
                 const num = Number(stored);
                 if (!Number.isNaN(num)) slideIndex = num;
               }
             }
 
-            const initialData = `data: ${JSON.stringify({ lessonId, slideIndex })}\n\n`;
+            const initialData = `data: ${JSON.stringify({ lessonId, slideIndex, timestamp })}\n\n`;
             controller.enqueue(new TextEncoder().encode(initialData));
           } catch (error) {
             console.error("SSE 초기 상태 전송 오류:", error);
@@ -225,13 +245,15 @@ export async function onRequestGet(context) {
     const stored = await env.SLIDES.get(classId);
     let lessonId = "lesson1";
     let slideIndex = 0;
+    let timestamp = Date.now();
 
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
-        // 새 형식: { lessonId, slideIndex }
+        // 새 형식: { lessonId, slideIndex, timestamp }
         if (parsed.lessonId) lessonId = parsed.lessonId;
         if (typeof parsed.slideIndex === "number") slideIndex = parsed.slideIndex;
+        if (parsed.timestamp) timestamp = parsed.timestamp;
       } catch {
         // 혹시 예전처럼 숫자만 저장돼 있었다면 (하위 호환성)
         const num = Number(stored);
@@ -240,7 +262,7 @@ export async function onRequestGet(context) {
     }
 
     return new Response(
-      JSON.stringify({ lessonId, slideIndex }),
+      JSON.stringify({ lessonId, slideIndex, timestamp }),
       {
         status: 200,
         headers: {
@@ -302,22 +324,35 @@ export async function onRequestPost(context) {
       );
     }
 
-    // KV에 JSON 형식으로 저장 { lessonId, slideIndex }
-    const value = JSON.stringify({ lessonId, slideIndex });
+    // KV에 JSON 형식으로 저장 { lessonId, slideIndex, timestamp }
+    const timestamp = Date.now();
+    const value = JSON.stringify({ lessonId, slideIndex, timestamp });
     await env.SLIDES.put(classId, value);
 
     // 연결된 모든 SSE 클라이언트에 변경사항 브로드캐스트
     // 에러가 발생해도 계속 진행
+    let broadcastSuccess = false;
+    let connectedCount = 0;
     try {
-      broadcastToClients(classId, { lessonId, slideIndex });
-      console.log(`[SSE] 슬라이드 변경 브로드캐스트: classId=${classId}, lessonId=${lessonId}, slideIndex=${slideIndex}`);
+      const clients = connectedClients.get(classId);
+      connectedCount = clients ? clients.size : 0;
+      broadcastToClients(classId, { lessonId, slideIndex, timestamp });
+      broadcastSuccess = true;
+      console.log(`[SSE] 슬라이드 변경 브로드캐스트 성공: classId=${classId}, lessonId=${lessonId}, slideIndex=${slideIndex}, 연결된 학생=${connectedCount}`);
     } catch (error) {
       console.error(`[SSE] 브로드캐스트 오류:`, error);
       // 브로드캐스트 실패해도 저장은 성공했으므로 계속 진행
     }
 
     return new Response(
-      JSON.stringify({ ok: true, lessonId, slideIndex }),
+      JSON.stringify({ 
+        ok: true, 
+        lessonId, 
+        slideIndex, 
+        timestamp,
+        broadcastSuccess,
+        connectedStudents: connectedCount
+      }),
       {
         status: 200,
         headers: {
