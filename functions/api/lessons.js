@@ -1,6 +1,7 @@
 /**
- * 슬라이드 목록 API
- * GET: 모든 레슨과 슬라이드 목록 반환
+ * 레슨 및 슬라이드 목록 API
+ * GET /api/lessons: 모든 레슨 목록 반환 (레슨 존재 여부만 확인)
+ * GET /api/lessons?lessonId=lesson1: 특정 레슨의 슬라이드 목록 반환
  */
 
 // 슬라이드 검색 관련 상수
@@ -25,7 +26,7 @@ async function checkSlideExists(baseUrl, lessonId, slideNum) {
       if (response.ok) {
         return { exists: true, url };
       }
-    } catch {
+    } catch (error) {
       // 무시하고 다음 후보 시도
     }
   }
@@ -48,19 +49,32 @@ async function findSlidesForLesson(
       const slideNum = i + j;
       if (slideNum > maxSlides) break;
       checkPromises.push(
-        checkSlideExists(baseUrl, lessonId, slideNum).then((res) => ({
-          num: slideNum,
-          exists: res.exists,
-          url: res.url,
-        }))
+        checkSlideExists(baseUrl, lessonId, slideNum)
+          .then((res) => ({
+            num: slideNum,
+            exists: res.exists,
+            url: res.url,
+          }))
+          .catch((error) => {
+            // 개별 슬라이드 확인 실패 시에도 계속 진행
+            console.error(`[${lessonId}] 슬라이드${slideNum} 확인 중 오류:`, error.message);
+            return {
+              num: slideNum,
+              exists: false,
+              url: null,
+            };
+          })
       );
     }
 
-    const results = await Promise.all(checkPromises);
-
+    // Promise.allSettled를 사용하여 일부 실패해도 계속 진행
+    const results = await Promise.allSettled(checkPromises);
+    
     for (const result of results) {
-      if (result.exists) {
-        slides.push(`slides/${lessonId}/슬라이드${result.num}.JPG`);
+      if (result.status === 'fulfilled' && result.value.exists) {
+        slides.push(`slides/${lessonId}/슬라이드${result.value.num}.JPG`);
+      } else if (result.status === 'rejected') {
+        console.error(`[${lessonId}] 배치 처리 중 오류:`, result.reason);
       }
     }
   }
@@ -74,35 +88,45 @@ async function findSlidesForLesson(
     });
   }
 
+  console.log(`[${lessonId}] 총 ${slides.length}개 슬라이드 발견`);
   return slides;
 }
 
-// 모든 레슨 찾기 (레슨별 병렬 처리 제한)
+// 레슨 존재 여부 확인 (슬라이드 1개만 확인하여 레슨 존재 여부 판단)
+async function checkLessonExists(baseUrl, lessonId) {
+  // 첫 번째 슬라이드가 존재하면 레슨이 존재하는 것으로 판단
+  const result = await checkSlideExists(baseUrl, lessonId, 1);
+  return result.exists;
+}
+
+// 모든 레슨 목록 찾기 (레슨 존재 여부만 확인)
 async function findAllLessons(baseUrl, maxLessons = 50) {
-  const lessons = {};
-  const lessonBatchSize = 5; // 한 번에 확인할 레슨 수
+  const lessons = [];
+  const lessonBatchSize = 10; // 레슨 존재 여부만 확인하므로 병렬 처리 가능
 
   for (let i = 1; i <= maxLessons; i += lessonBatchSize) {
-    const lessonPromises = [];
+    const checkPromises = [];
     
     for (let j = 0; j < lessonBatchSize; j++) {
       const lessonNum = i + j;
       if (lessonNum > maxLessons) break;
       
       const lessonId = `lesson${lessonNum}`;
-      lessonPromises.push(
-        findSlidesForLesson(baseUrl, lessonId).then(slides => ({
-          lessonId,
-          slides,
-        }))
+      checkPromises.push(
+        checkLessonExists(baseUrl, lessonId)
+          .then(exists => ({ lessonId, exists }))
+          .catch(error => {
+            console.error(`[${lessonId}] 레슨 존재 여부 확인 중 오류:`, error.message);
+            return { lessonId, exists: false };
+          })
       );
     }
 
-    const results = await Promise.all(lessonPromises);
+    const results = await Promise.allSettled(checkPromises);
     
     for (const result of results) {
-      if (result.slides.length > 0) {
-        lessons[result.lessonId] = result.slides;
+      if (result.status === 'fulfilled' && result.value.exists) {
+        lessons.push(result.value.lessonId);
       }
     }
   }
@@ -118,22 +142,44 @@ export async function onRequestGet(context) {
     // 기본 URL 구성 (현재 요청의 origin 사용)
     const baseUrl = url.origin;
     
-    // 모든 레슨과 슬라이드 목록 가져오기
-    const lessons = await findAllLessons(baseUrl);
+    // lessonId 파라미터 확인
+    const lessonId = url.searchParams.get("lessonId");
     
-    return new Response(
-      JSON.stringify(lessons),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-          "Cache-Control": "no-cache, no-store, must-revalidate", // 캐시 비활성화
-        },
-      }
-    );
+    if (lessonId) {
+      // 특정 레슨의 슬라이드 목록 반환
+      const slides = await findSlidesForLesson(baseUrl, lessonId);
+      
+      return new Response(
+        JSON.stringify({ [lessonId]: slides }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+          },
+        }
+      );
+    } else {
+      // 모든 레슨 목록만 반환 (레슨 존재 여부만 확인)
+      const lessons = await findAllLessons(baseUrl);
+      
+      return new Response(
+        JSON.stringify(lessons),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+          },
+        }
+      );
+    }
   } catch (error) {
     console.error("레슨 목록 조회 오류:", error);
     return new Response(

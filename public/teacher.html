@@ -294,7 +294,7 @@
             return true;
         }
 
-        // API에서 모든 레슨 가져오기
+        // API에서 모든 레슨 목록 가져오기 (레슨 존재 여부만 확인)
         async function fetchAllLessons() {
             try {
                 // 캐시 무시를 위해 타임스탬프 추가
@@ -308,17 +308,70 @@
                     throw new Error(`HTTP ${response.status}`);
                 }
                 const lessons = await response.json();
-                console.log('로드된 레슨:', Object.keys(lessons));
-                return lessons;
+                console.log('로드된 레슨 목록:', lessons);
+                return lessons; // 배열 형태로 반환됨
             } catch (error) {
                 console.error('레슨 목록 가져오기 오류:', error);
-                return {};
+                return [];
+            }
+        }
+
+        // 특정 레슨의 슬라이드 목록 가져오기
+        async function fetchLessonSlides(lessonId) {
+            try {
+                const response = await fetch(`/api/lessons?lessonId=${lessonId}&t=${Date.now()}`, {
+                    cache: 'no-store',
+                    headers: {
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                const slides = data[lessonId] || [];
+                console.log(`[${lessonId}] 로드된 슬라이드: ${slides.length}개`);
+                return slides;
+            } catch (error) {
+                console.error(`[${lessonId}] 슬라이드 목록 가져오기 오류:`, error);
+                return [];
             }
         }
 
         // 현재 레슨의 슬라이드 배열 가져오기
         function getCurrentSlides() {
             return LESSONS[currentLessonId] || [];
+        }
+
+        // 레슨의 슬라이드 로드
+        async function loadLessonSlides(lessonId) {
+            // 이미 로드된 레슨은 다시 로드하지 않음
+            if (LESSONS[lessonId] && LESSONS[lessonId].length > 0) {
+                console.log(`[${lessonId}] 이미 로드된 슬라이드 사용 (${LESSONS[lessonId].length}개)`);
+                return;
+            }
+
+            // 로딩 상태 표시
+            const slideDisplay = document.getElementById('slideDisplay');
+            slideDisplay.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">로딩 중...</span>
+                    </div>
+                    <p class="mt-3 text-muted">슬라이드를 불러오는 중...</p>
+                </div>
+            `;
+
+            const slides = await fetchLessonSlides(lessonId);
+            LESSONS[lessonId] = slides;
+
+            if (slides.length === 0) {
+                slideDisplay.innerHTML = `
+                    <div class="text-center text-warning">
+                        <p class="fs-5">이 레슨에 슬라이드가 없습니다.</p>
+                    </div>
+                `;
+            }
         }
 
         // 이미지 프리로딩
@@ -590,6 +643,8 @@
                     if (data.lessonId) {
                         currentLessonId = data.lessonId;
                         document.getElementById('lessonSelect').value = currentLessonId;
+                        // 서버에서 불러온 레슨의 슬라이드 로드
+                        await loadLessonSlides(currentLessonId);
                     }
                     if (typeof data.slideIndex === 'number') {
                         currentSlideIndex = data.slideIndex;
@@ -603,39 +658,36 @@
         }
 
         // 레슨 선택 드롭다운 채우기
-        function populateLessonSelect() {
+        function populateLessonSelect(lessonIds) {
             const select = document.getElementById('lessonSelect');
             select.innerHTML = '';
             
-            const lessonIds = Object.keys(LESSONS).sort((a, b) => {
-                // lesson1, lesson2, lesson10 순서로 정렬
+            // lesson1, lesson2, lesson10 순서로 정렬
+            const sortedLessonIds = [...lessonIds].sort((a, b) => {
                 const numA = parseInt(a.replace('lesson', ''));
                 const numB = parseInt(b.replace('lesson', ''));
                 return numA - numB;
             });
 
-            if (lessonIds.length === 0) {
+            if (sortedLessonIds.length === 0) {
                 select.innerHTML = '<option value="">레슨을 찾을 수 없습니다</option>';
                 return;
             }
 
-            lessonIds.forEach(lessonId => {
+            sortedLessonIds.forEach(lessonId => {
                 const option = document.createElement('option');
                 option.value = lessonId;
-                option.textContent = lessonId.replace('lesson', '단원 ') + ' 슬라이드';
+                option.textContent = lessonId.replace('lesson', '단원 ');
                 select.appendChild(option);
             });
             
             // 현재 선택된 레슨이 목록에 있으면 선택 유지
-            if (currentLessonId && lessonIds.includes(currentLessonId)) {
+            if (currentLessonId && sortedLessonIds.includes(currentLessonId)) {
                 select.value = currentLessonId;
-            } else if (lessonIds.length > 0) {
+            } else if (sortedLessonIds.length > 0) {
                 // 없으면 첫 번째 레슨 선택
-                currentLessonId = lessonIds[0];
+                currentLessonId = sortedLessonIds[0];
                 select.value = currentLessonId;
-                // 슬라이드 렌더링 갱신
-                currentSlideIndex = 0;
-                renderSlide();
             }
         }
 
@@ -650,17 +702,16 @@
             lessonSelect.innerHTML = '<option>수업 목록을 불러오는 중...</option>';
             lessonSelect.disabled = true;
 
-            // API에서 모든 레슨 가져오기
+            // API에서 모든 레슨 목록 가져오기 (레슨 존재 여부만 확인)
+            let lessonIds = [];
             try {
-                LESSONS = await fetchAllLessons();
+                lessonIds = await fetchAllLessons();
             } catch (error) {
                 console.error('초기화 중 오류:', error);
-                LESSONS = {};
-            } finally {
-                lessonSelect.disabled = false;
+                lessonIds = [];
             }
             
-            if (Object.keys(LESSONS).length === 0) {
+            if (lessonIds.length === 0) {
                 document.getElementById('slideDisplay').innerHTML = `
                     <div class="text-center text-warning">
                         <p class="fs-5">레슨을 찾을 수 없습니다.</p>
@@ -668,20 +719,39 @@
                     </div>
                 `;
                 lessonSelect.innerHTML = '<option value="">레슨 없음</option>';
+                lessonSelect.disabled = false;
                 return;
             }
 
             // 레슨 선택 드롭다운 채우기
-            populateLessonSelect();
+            populateLessonSelect(lessonIds);
+            lessonSelect.disabled = false;
+
+            // 초기 레슨 선택 (첫 번째 레슨)
+            if (lessonIds.length > 0) {
+                currentLessonId = lessonIds.sort((a, b) => {
+                    const numA = parseInt(a.replace('lesson', ''));
+                    const numB = parseInt(b.replace('lesson', ''));
+                    return numA - numB;
+                })[0];
+                lessonSelect.value = currentLessonId;
+                
+                // 첫 번째 레슨의 슬라이드 로드
+                await loadLessonSlides(currentLessonId);
+            }
             
             // 레슨 선택 변경 이벤트
-            document.getElementById('lessonSelect').addEventListener('change', () => {
-                currentLessonId = document.getElementById('lessonSelect').value;
-                currentSlideIndex = 0; // 새 레슨의 첫 슬라이드부터 시작
-                renderSlide();
-                syncStateToServer().catch(error => {
-                    console.error('레슨 변경 동기화 오류:', error);
-                });
+            document.getElementById('lessonSelect').addEventListener('change', async () => {
+                const selectedLessonId = document.getElementById('lessonSelect').value;
+                if (selectedLessonId && selectedLessonId !== currentLessonId) {
+                    currentLessonId = selectedLessonId;
+                    currentSlideIndex = 0; // 새 레슨의 첫 슬라이드부터 시작
+                    await loadLessonSlides(currentLessonId);
+                    renderSlide();
+                    syncStateToServer().catch(error => {
+                        console.error('레슨 변경 동기화 오류:', error);
+                    });
+                }
             });
 
             // 슬라이드 번호 입력 필드 이벤트
