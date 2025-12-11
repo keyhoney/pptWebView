@@ -4,7 +4,7 @@
  */
 
 // 슬라이드 검색 관련 상수
-const MAX_SLIDES_PER_LESSON = 200; // 레슨당 최대 탐색 슬라이드 수(과도한 요청 방지)
+const MAX_SLIDES_PER_LESSON = 30; // 레슨당 최대 탐색 슬라이드 수(과도한 요청 방지)
 const SLIDE_BATCH_SIZE = 10; // 한 번에 확인할 슬라이드 수
 
 // 슬라이드 파일 존재 여부 확인 (대소문자 확장자 모두 시도, 첫 번째에서 찾으면 즉시 반환)
@@ -32,62 +32,21 @@ async function checkSlideExists(baseUrl, lessonId, slideNum) {
   return { exists: false, url: candidates[0] };
 }
 
-// 존재하는 슬라이드의 최댓값을 탐색 (지수 증가 후 이진 탐색)
-async function findMaxSlideNumber(baseUrl, lessonId, maxSlides = MAX_SLIDES_PER_LESSON) {
-  // 1번 슬라이드부터 존재하는지 확인
-  const first = await checkSlideExists(baseUrl, lessonId, 1);
-  if (!first.exists) return 0;
-
-  let low = 1;
-  let high = 2;
-
-  // 지수 증가로 상한선 추정
-  while (high <= maxSlides) {
-    const res = await checkSlideExists(baseUrl, lessonId, high);
-    if (res.exists) {
-      low = high;
-      high = Math.min(high * 2, maxSlides);
-    } else {
-      break;
-    }
-  }
-
-  // 이진 탐색으로 정확한 최댓값 결정
-  let left = low + 1;
-  let right = Math.min(high, maxSlides);
-  let maxFound = low;
-
-  while (left <= right) {
-    const mid = Math.floor((left + right) / 2);
-    const res = await checkSlideExists(baseUrl, lessonId, mid);
-    if (res.exists) {
-      maxFound = mid;
-      left = mid + 1;
-    } else {
-      right = mid - 1;
-    }
-  }
-
-  return maxFound;
-}
-
-// 특정 레슨의 모든 슬라이드 찾기 (최댓값을 먼저 찾은 뒤 전체 수집)
+// 특정 레슨의 모든 슬라이드 찾기 (조기 종료 없이 최대값까지 모두 확인)
 async function findSlidesForLesson(
   baseUrl,
   lessonId,
   maxSlides = MAX_SLIDES_PER_LESSON
 ) {
-  const maxSlideNum = await findMaxSlideNumber(baseUrl, lessonId, maxSlides);
-  if (maxSlideNum === 0) return [];
-
   const slides = [];
   const batchSize = SLIDE_BATCH_SIZE;
 
-  for (let i = 1; i <= maxSlideNum; i += batchSize) {
+  // 조기 종료 없이 최대 슬라이드 수까지 모두 확인
+  for (let i = 1; i <= maxSlides; i += batchSize) {
     const checkPromises = [];
     for (let j = 0; j < batchSize; j++) {
       const slideNum = i + j;
-      if (slideNum > maxSlideNum) break;
+      if (slideNum > maxSlides) break;
       checkPromises.push(
         checkSlideExists(baseUrl, lessonId, slideNum).then((res) => ({
           num: slideNum,
@@ -107,17 +66,19 @@ async function findSlidesForLesson(
   }
 
   // 슬라이드 번호 순으로 정렬
-  slides.sort((a, b) => {
-    const numA = parseInt(a.match(/슬라이드(\d+)\.JPG/)[1]);
-    const numB = parseInt(b.match(/슬라이드(\d+)\.JPG/)[1]);
-    return numA - numB;
-  });
+  if (slides.length > 0) {
+    slides.sort((a, b) => {
+      const numA = parseInt(a.match(/슬라이드(\d+)\.JPG/)[1]);
+      const numB = parseInt(b.match(/슬라이드(\d+)\.JPG/)[1]);
+      return numA - numB;
+    });
+  }
 
   return slides;
 }
 
 // 모든 레슨 찾기 (레슨별 병렬 처리 제한)
-async function findAllLessons(baseUrl, maxLessons = 20) {
+async function findAllLessons(baseUrl, maxLessons = 50) {
   const lessons = {};
   const lessonBatchSize = 5; // 한 번에 확인할 레슨 수
 
