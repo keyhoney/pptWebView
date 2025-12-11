@@ -3,6 +3,11 @@
  * GET: 모든 레슨과 슬라이드 목록 반환
  */
 
+// 슬라이드 검색 관련 상수
+const MAX_SLIDES_PER_LESSON = 60; // 레슨당 최대 탐색 슬라이드 수(과도한 요청 방지)
+const MISS_LIMIT_AFTER_FOUND = 5; // 슬라이드를 찾은 뒤 연속 미발견 허용치
+const SLIDE_BATCH_SIZE = 10; // 한 번에 확인할 슬라이드 수
+
 // 슬라이드 파일 존재 여부 확인 (대소문자 확장자 모두 시도, 첫 번째에서 찾으면 즉시 반환)
 async function checkSlideExists(baseUrl, lessonId, slideNum) {
   const fileName = `슬라이드${slideNum}.JPG`;
@@ -29,10 +34,15 @@ async function checkSlideExists(baseUrl, lessonId, slideNum) {
 }
 
 // 특정 레슨의 모든 슬라이드 찾기 (배치 처리, 조기 종료 완화)
-async function findSlidesForLesson(baseUrl, lessonId, maxSlides = 300) {
+async function findSlidesForLesson(
+  baseUrl,
+  lessonId,
+  maxSlides = MAX_SLIDES_PER_LESSON,
+  missLimit = MISS_LIMIT_AFTER_FOUND
+) {
   const slides = [];
-  const batchSize = 10; // 한 번에 확인할 슬라이드 수
-  let consecutiveMisses = 0; // 연속으로 못 찾은 슬라이드 수
+  const batchSize = SLIDE_BATCH_SIZE;
+  let consecutiveMisses = 0; // 슬라이드를 한 번이라도 찾은 이후 연속 미발견 수
   let foundAny = false;
 
   for (let i = 1; i <= maxSlides; i += batchSize) {
@@ -56,16 +66,16 @@ async function findSlidesForLesson(baseUrl, lessonId, maxSlides = 300) {
         slides.push(`slides/${lessonId}/슬라이드${result.num}.JPG`);
         foundAny = true;
         consecutiveMisses = 0;
-      } else {
+      } else if (foundAny) {
         consecutiveMisses++;
       }
     }
 
-    // 이미 슬라이드를 찾은 이후에 30개 연속 실패하면 중단 (비용 최적화)
-    // 실제로는 슬라이드가 연속적으로 존재하므로 30개면 충분
-    if (foundAny && consecutiveMisses >= 30) {
+    // 이미 슬라이드를 찾은 이후 missLimit개 연속 실패하면 중단 (비용 최적화)
+    // Cloudflare Workers의 서브 요청 제한을 피하기 위해 완화된 값 사용
+    if (foundAny && consecutiveMisses >= missLimit) {
       console.log(
-        `[레슨 ${lessonId}] 슬라이드 연속 30개 미발견, 탐색 종료 (${slides.length}개 발견)`
+        `[레슨 ${lessonId}] 슬라이드 연속 ${missLimit}개 미발견, 탐색 종료 (${slides.length}개 발견)`
       );
       break;
     }
